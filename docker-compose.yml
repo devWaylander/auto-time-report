@@ -1,0 +1,39 @@
+name: auto-time-report
+
+# База лежит в ./data на хосте: локальный запуск и Docker работают с одним и тем же файлом.
+# Контейнеры запускаются под твоим UID/GID, чтобы файлы в ./data и db/migrations принадлежали тебе
+x-user: &user "${UID:-1000}:${GID:-1000}"
+
+services:
+  # Накатывает миграции и завершается; бот стартует только после успешного наката.
+  # Через него же работают make migrate-*, поэтому ставить dbmate локально не нужно
+  migrate:
+    image: ghcr.io/amacneil/dbmate:2.26.0
+    user: *user
+    environment:
+      DATABASE_URL: sqlite:/data/bot.db
+      DBMATE_MIGRATIONS_DIR: /db/migrations
+      # Для SQLite dump схемы требует утилиту sqlite3, а нам он не нужен
+      DBMATE_NO_DUMP_SCHEMA: "true"
+    volumes:
+      - ./db/migrations:/db/migrations
+      - ./data:/data
+    command: ["up"]
+
+  bot:
+    build: .
+    user: *user
+    env_file:
+      - path: .env
+        required: true
+        # Значения как есть, без подстановки ${...}: пароль с $ не сломается
+        format: raw
+    environment:
+      # Путь внутри контейнера, перекрывает локальный DATABASE_URL из .env
+      DATABASE_URL: sqlite:/data/bot.db
+    volumes:
+      - ./data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
