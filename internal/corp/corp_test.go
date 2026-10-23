@@ -269,3 +269,33 @@ func TestRoutesAndBaseURL(t *testing.T) {
 		t.Error("broken CA accepted")
 	}
 }
+
+func TestTunnelEncryptedKey(t *testing.T) {
+	dir := t.TempDir()
+	go func() {
+		for {
+			if _, err := os.Stat(filepath.Join(dir, tunnelConfigName)); err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		ln, err := net.Listen("unix", filepath.Join(dir, tunnelSocketName))
+		if err != nil {
+			return
+		}
+		defer func() { _ = ln.Close() }()
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = conn.Write([]byte(">PASSWORD:Need 'Private Key' password\r\n"))
+		_, _ = bufio.NewReader(conn).ReadString('\n')
+		time.Sleep(time.Second)
+	}()
+
+	_, err := NewTunnel(dir, 5*time.Second).Up(context.Background(), *testCreds().VPN)
+	if err == nil || !strings.Contains(err.Error(), "private key") {
+		t.Fatalf("error = %v, want encrypted key error", err)
+	}
+}
