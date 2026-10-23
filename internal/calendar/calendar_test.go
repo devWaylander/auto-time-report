@@ -26,8 +26,8 @@ func TestDay(t *testing.T) {
 	c := New(srv.URL)
 	ctx := context.Background()
 	for d, want := range map[time.Time]DayKind{
-		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC):  Off,
-		time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC):  Short,
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC):   Off,
+		time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC):   Short,
 		time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC): Working,
 	} {
 		got, err := c.Day(ctx, d)
