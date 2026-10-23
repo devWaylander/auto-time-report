@@ -374,3 +374,48 @@ func TestDeleteUserCascades(t *testing.T) {
 		t.Fatalf("settings survived user deletion: %v", err)
 	}
 }
+
+func TestSchemaRejectsMalformedValues(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	u, err := s.EnsureUser(ctx, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	insertSubmission := `INSERT INTO submissions (user_id, issue_key, work_date, duration_seconds, comment, worklog_id, period_id)
+		VALUES (?, ?, ?, ?, 'x', ?, ?)`
+	bad := []struct {
+		name string
+		sql  string
+		args []any
+	}{
+		{"мусор вместо даты", insertSubmission, []any{u.ID, "ABC-1", "garbage", 60, 1, 1}},
+		{"несуществующая дата", insertSubmission, []any{u.ID, "ABC-1", "2026-02-31", 60, 1, 1}},
+		{"дата без ведущих нулей", insertSubmission, []any{u.ID, "ABC-1", "2026-2-3", 60, 1, 1}},
+		{"кривой ключ задачи", insertSubmission, []any{u.ID, "abc-1; DROP", "2026-10-19", 60, 1, 1}},
+		{"больше суток", insertSubmission, []any{u.ID, "ABC-1", "2026-10-19", 86401, 1, 1}},
+		{"нулевой ID worklog'а", insertSubmission, []any{u.ID, "ABC-1", "2026-10-19", 60, 0, 1}},
+		{"время не в UTC", `UPDATE user_settings SET paused_until = ? WHERE user_id = ?`, []any{"2026-10-19T10:00:00+07:00", u.ID}},
+		{"время без секунд", `UPDATE week_posts SET edited_at = ?`, []any{"2026-10-19T10:00Z"}},
+		{"кривая дата отпуска", `INSERT INTO vacations (user_id, start_date, end_date) VALUES (?, ?, ?)`, []any{u.ID, "27.10", "31.10"}},
+	}
+	if _, _, err := s.SaveWeekPost(ctx, WeekPost{UserID: u.ID, ChatID: -1, MessageID: 1, Text: "x", PostedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range bad {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := s.db.ExecContext(ctx, tt.sql, tt.args...); err == nil {
+				t.Fatal("schema accepted a malformed value")
+			}
+		})
+	}
+
+	// Корректные значения и NULL в необязательных полях проходят
+	if _, err := s.db.ExecContext(ctx, insertSubmission, u.ID, "ABC_X-12", "2028-02-29", 86400, 1, 1); err != nil {
+		t.Fatalf("valid submission rejected: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE user_settings SET paused_until = NULL WHERE user_id = ?`, u.ID); err != nil {
+		t.Fatalf("NULL paused_until rejected: %v", err)
+	}
+}
