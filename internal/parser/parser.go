@@ -123,7 +123,7 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 
 	for i, raw := range strings.Split(text, "\n") {
 		n := i + 1
-		line := strings.TrimSpace(strings.ReplaceAll(raw, " ", " "))
+		line := normalizeLine(raw)
 		switch {
 		case line == "":
 			continue
@@ -210,13 +210,18 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 // Нужно, чтобы бот не принимал за пост недели другие заметки в канале
 func LooksLikePost(text string) bool {
 	for _, raw := range strings.Split(text, "\n") {
-		line := strings.TrimSpace(strings.ReplaceAll(raw, " ", " "))
+		line := normalizeLine(raw)
 		if line == "" {
 			continue
 		}
 		return dateLineRe.MatchString(line) || issueLineRe.MatchString(line)
 	}
 	return false
+}
+
+// normalizeLine убирает пробелы по краям, неразрывные пробелы и BOM, который добавляют некоторые клиенты
+func normalizeLine(raw string) string {
+	return strings.TrimSpace(strings.NewReplacer("\u00a0", " ", "\ufeff", "").Replace(raw))
 }
 
 type worklogKey struct {
@@ -278,17 +283,22 @@ func resolveDate(m []string, today time.Time) (time.Time, error) {
 	return best, nil
 }
 
-// parseDuration ищет в строке "N час…/ч" и "N мин…". Числа сразу после ASCII-символов и дефиса
-// пропускаются, чтобы "ABC-123 чинил" не стало 123 часами
+var (
+	hourWords   = map[string]bool{"ч": true, "час": true, "часа": true, "часов": true}
+	minuteWords = map[string]bool{"мин": true, "минута": true, "минуту": true, "минуты": true, "минут": true}
+)
+
+// Потолок одной записи: защищает и от опечаток, и от переполнения при умножении
+const maxEntryMinutes = 24 * 60
+
+// parseDuration ищет в строке "N час/часа/часов/ч" и "N мин/минут…". Единицы времени - только точные слова,
+// чтобы "5 минимальных" или "12 часовой" не стали временем. Число не считается длительностью, если оно часть
+// ключа задачи ("ABC-123 чинил") или времени ("10:30 часов")
 func parseDuration(line string) (time.Duration, error) {
 	var hours, minutes []float64
 	for _, m := range amountRe.FindAllStringSubmatchIndex(line, -1) {
-		if m[0] > 0 {
-			prev, _ := utf8.DecodeLastRuneInString(line[:m[0]])
-			if prev == '-' || prev == '_' || prev == '.' || prev == ',' || prev == ':' ||
-				(prev < utf8.RuneSelf && (unicode.IsLetter(prev) || unicode.IsDigit(prev))) {
-				continue
-			}
+		if partOfToken(line[:m[0]]) {
+			continue
 		}
 		num, err := strconv.ParseFloat(strings.Replace(line[m[2]:m[3]], ",", ".", 1), 64)
 		if err != nil {
@@ -296,9 +306,9 @@ func parseDuration(line string) (time.Duration, error) {
 		}
 		word := strings.ToLower(line[m[4]:m[5]])
 		switch {
-		case word == "ч" || strings.HasPrefix(word, "час"):
+		case hourWords[word]:
 			hours = append(hours, num)
-		case strings.HasPrefix(word, "мин"):
+		case minuteWords[word]:
 			minutes = append(minutes, num)
 		}
 	}
@@ -319,11 +329,35 @@ func parseDuration(line string) (time.Duration, error) {
 	if len(minutes) == 1 {
 		total += minutes[0]
 	}
+	if total > maxEntryMinutes {
+		return 0, errors.New("в одной записи больше суток")
+	}
 	d := time.Duration(math.Round(total)) * time.Minute
 	if d <= 0 {
 		return 0, errors.New("длительность должна быть больше нуля")
 	}
 	return d, nil
+}
+
+// partOfToken - число продолжает слово, ключ задачи или время: перед ним ASCII-буква, цифра или "_",
+// либо "-", ".", ",", ":" сразу после ASCII-буквы или цифры ("ABC-123", "v1.2", "10:30")
+func partOfToken(before string) bool {
+	prev, size := utf8.DecodeLastRuneInString(before)
+	if size == 0 {
+		return false
+	}
+	if isASCIIAlnum(prev) || prev == '_' {
+		return true
+	}
+	if prev == '-' || prev == '.' || prev == ',' || prev == ':' {
+		prev2, _ := utf8.DecodeLastRuneInString(before[:len(before)-size])
+		return isASCIIAlnum(prev2)
+	}
+	return false
+}
+
+func isASCIIAlnum(r rune) bool {
+	return r < utf8.RuneSelf && (unicode.IsLetter(r) || unicode.IsDigit(r))
 }
 
 // FormatDuration печатает длительность по-человечески: "7ч 30м", "8ч", "45м"

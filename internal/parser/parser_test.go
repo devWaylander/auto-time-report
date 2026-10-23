@@ -157,6 +157,12 @@ func TestParseDurations(t *testing.T) {
 		{"ABC-123 чинил баг - 3 часа", 3 * time.Hour},
 		{"ABC-12 часовой пояс - 1 час", time.Hour},
 		{"Созвон 2 раза - 45 минут", 45 * time.Minute},
+		{"Ревью -2 часа 30 минут", 2*time.Hour + 30*time.Minute},
+		{"Ревью:2 часа 30 минут", 2*time.Hour + 30*time.Minute},
+		{"До 5 минимальных - 1 час", time.Hour},
+		{"Задача про 12 часовой пояс - 1 час", time.Hour},
+		{"Созвон в 10:30 - 30 минут", 30 * time.Minute},
+		{"Работа - 15 минуту", 15 * time.Minute},
 	}
 	for _, tt := range tests {
 		t.Run(tt.line, func(t *testing.T) {
@@ -178,6 +184,9 @@ func TestParseDurationErrors(t *testing.T) {
 		"Работа - 10 минут 20 минут",
 		"Работа - 0 часов",
 		"ABC-123 чинил",
+		"Работа - 9007199254741052 минут",
+		"Работа - 25 часов",
+		"Работа - 5 минимальных",
 	} {
 		t.Run(line, func(t *testing.T) {
 			if d, err := parseDuration(line); err == nil {
@@ -304,24 +313,24 @@ func TestParseEmptyAndNoIssue(t *testing.T) {
 }
 
 func TestParseWhitespace(t *testing.T) {
-	text := " 19.10 \r\n  Работа - 2 часа  \r\n"
+	text := "\u00a019.10\u00a0\r\n  Работа\u00a0-\u00a02\u00a0часа  \r\n"
 	r := mustParse(t, text, "ABC-1", at(2026, 10, 20, 12))
 	if got := r.Worklogs[0].Entries[0].Text; got != "Работа - 2 часа" {
 		t.Fatalf("entry text = %q", got)
 	}
-	if strings.ContainsAny(r.Worklogs[0].Comment(), "\r ") {
+	if strings.ContainsAny(r.Worklogs[0].Comment(), "\r\u00a0") {
 		t.Fatal("comment still contains CR or NBSP")
 	}
 }
 
 func TestLooksLikePost(t *testing.T) {
 	for text, want := range map[string]bool{
-		"19.10\nРабота - 2 часа":     true,
-		"\n\n  ABC-1\n19.10\nРабота": true,
-		"Купить молоко":              false,
-		"Заметка про 19.10\n19.10":   false,
-		"":                           false,
-		" 19.10 \nРабота - 1ч":       true,
+		"19.10\nРабота - 2 часа":         true,
+		"\n\n  ABC-1\n19.10\nРабота":     true,
+		"Купить молоко":                  false,
+		"Заметка про 19.10\n19.10":       false,
+		"":                               false,
+		"\u00a019.10\u00a0\nРабота - 1ч": true,
 	} {
 		if got := LooksLikePost(text); got != want {
 			t.Errorf("LooksLikePost(%q) = %v, want %v", text, got, want)
