@@ -103,6 +103,41 @@ func (s *Store) CancelVacations(ctx context.Context, userID int64, from time.Tim
 	return nil
 }
 
+// UpcomingVacations возвращает отпуска, которые ещё не закончились к дате from
+func (s *Store) UpcomingVacations(ctx context.Context, userID int64, from time.Time) ([]Vacation, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, start_date, end_date FROM vacations
+		WHERE user_id = ? AND end_date >= ?
+		ORDER BY start_date`, userID, formatDate(from))
+	if err != nil {
+		return nil, fmt.Errorf("query vacations: %w", err)
+	}
+	// Ошибки чтения ловит rows.Err ниже, у Close после полного обхода ловить нечего
+	defer func() { _ = rows.Close() }()
+
+	var vacations []Vacation
+	for rows.Next() {
+		var (
+			v          = Vacation{UserID: userID}
+			start, end string
+		)
+		if err := rows.Scan(&v.ID, &start, &end); err != nil {
+			return nil, fmt.Errorf("scan vacation: %w", err)
+		}
+		if v.Start, err = parseDate(start); err != nil {
+			return nil, err
+		}
+		if v.End, err = parseDate(end); err != nil {
+			return nil, err
+		}
+		vacations = append(vacations, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate vacations: %w", err)
+	}
+	return vacations, nil
+}
+
 // OnVacation сообщает, попадает ли дата в какой-нибудь отпуск пользователя
 func (s *Store) OnVacation(ctx context.Context, userID int64, date time.Time) (bool, error) {
 	var exists bool

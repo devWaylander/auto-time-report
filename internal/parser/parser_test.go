@@ -314,6 +314,21 @@ func TestParseWhitespace(t *testing.T) {
 	}
 }
 
+func TestLooksLikePost(t *testing.T) {
+	for text, want := range map[string]bool{
+		"19.10\nРабота - 2 часа":     true,
+		"\n\n  ABC-1\n19.10\nРабота": true,
+		"Купить молоко":              false,
+		"Заметка про 19.10\n19.10":   false,
+		"":                           false,
+		" 19.10 \nРабота - 1ч":       true,
+	} {
+		if got := LooksLikePost(text); got != want {
+			t.Errorf("LooksLikePost(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
 func TestFormatDuration(t *testing.T) {
 	for d, want := range map[time.Duration]string{
 		8 * time.Hour:                "8ч",
