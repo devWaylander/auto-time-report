@@ -182,6 +182,8 @@ func (s *Session) connect(ctx context.Context, creds VPNCredentials) error {
 				if err := s.sendCredentials(creds.Username, creds.Password); err != nil {
 					return err
 				}
+			case strings.HasPrefix(line, ">PASSWORD:Need 'Private Key'"):
+				return errors.New("vpn: private key in .ovpn is encrypted, export it without a password")
 			case strings.HasPrefix(line, ">PASSWORD:Verification Failed"):
 				return ErrVPNAuth
 			case strings.HasPrefix(line, ">FATAL:"):
