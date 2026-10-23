@@ -48,6 +48,13 @@ func run() error {
 	c.Jira.Username = ask(in, "  Логин: ")
 	c.Jira.Password = askSecret("  Пароль: ")
 	c.Jira.ExtraFields = ask(in, "  Поля wa_* из запроса браузера (wa_1=…&wa_2=…, Enter - нет): ")
+	if caPath := ask(in, "  Файл сертификата корпоративного CA в PEM, если браузер ругается на сертификат Jira (Enter - нет): "); caPath != "" {
+		ca, err := os.ReadFile(caPath)
+		if err != nil {
+			return err
+		}
+		c.Jira.CACert = string(ca)
+	}
 
 	if *ovpnPath != "" {
 		cfg, err := os.ReadFile(*ovpnPath)

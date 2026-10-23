@@ -51,12 +51,20 @@ func (t *Tunnel) Up(ctx context.Context, creds VPNCredentials) (*Session, error)
 
 	cfgPath := filepath.Join(t.runDir, tunnelConfigName)
 	sockPath := filepath.Join(t.runDir, tunnelSocketName)
-	// Остатки прошлой сессии, например после падения
+	// Бот мог упасть посреди прошлой сессии: такой openvpn ещё держит туннель, и sidecar занят им
+	if err := stopOrphan(ctx, sockPath); err != nil {
+		return nil, err
+	}
 	_ = os.Remove(cfgPath)
-	_ = os.Remove(sockPath)
 
-	// Группа читает: sidecar работает от root без CAP_DAC_OVERRIDE и состоит в группе бота
-	if err := os.WriteFile(cfgPath, []byte(buildConfig(creds.Config, sockPath, routes)), 0o640); err != nil {
+	// Пишем во временный файл и переименовываем: sidecar не должен увидеть недописанный конфиг
+	// без наших директив. Группа читает: sidecar работает от root без CAP_DAC_OVERRIDE и состоит в группе бота
+	tmpPath := cfgPath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(buildConfig(creds.Config, sockPath, routes)), 0o640); err != nil {
+		return nil, fmt.Errorf("vpn: write config: %w", err)
+	}
+	if err := os.Rename(tmpPath, cfgPath); err != nil {
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("vpn: write config: %w", err)
 	}
 	// Конфиг нужен openvpn только на старте: после появления сокета он уже прочитан
@@ -96,6 +104,32 @@ func buildConfig(userConfig, sockPath string, routes []*net.IPNet) string {
 	}
 	b.WriteString("verb 3\n")
 	return b.String()
+}
+
+// stopOrphan гасит openvpn, оставшийся от прошлой сессии, и ждёт, пока sidecar уберёт его сокет
+func stopOrphan(ctx context.Context, sockPath string) error {
+	if _, err := os.Stat(sockPath); err != nil {
+		return nil
+	}
+	conn, err := net.DialTimeout("unix", sockPath, time.Second)
+	if err != nil {
+		// Сокет есть, но никто не слушает: мусор после падения sidecar'а
+		_ = os.Remove(sockPath)
+		return nil
+	}
+	_, _ = conn.Write([]byte("signal SIGTERM\n"))
+	_ = conn.Close()
+
+	for {
+		if _, err := os.Stat(sockPath); err != nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("vpn: previous openvpn session did not stop: %w", ctx.Err())
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }
 
 func dialWhenReady(ctx context.Context, sockPath string) (net.Conn, error) {
@@ -151,7 +185,8 @@ func (s *Session) connect(ctx context.Context, creds VPNCredentials) error {
 			case strings.HasPrefix(line, ">PASSWORD:Verification Failed"):
 				return ErrVPNAuth
 			case strings.HasPrefix(line, ">FATAL:"):
-				return fmt.Errorf("vpn: %s", strings.TrimPrefix(line, ">FATAL:"))
+				// Текст не показываем: в нём бывает адрес корпоративного сервера. Подробности - с VPN_DEBUG=1
+				return errors.New("vpn: openvpn stopped with a fatal error, details with VPN_DEBUG=1")
 			case strings.HasPrefix(line, ">STATE:") && strings.Contains(line, ",CONNECTED,"):
 				return nil
 			case strings.HasPrefix(line, ">STATE:") && strings.Contains(line, ",EXITING,"):

@@ -100,9 +100,12 @@ func (r *Runner) Run(ctx context.Context, passphrase []byte, job Job, hooks Hook
 		defer sess.Close()
 	}
 
+	// Хранилище уже проверено в Open, ошибки разбора здесь невозможны
 	base, _ := url.Parse(creds.Jira.BaseURL)
 	extra, _ := url.ParseQuery(creds.Jira.ExtraFields)
+	rootCAs, _ := creds.Jira.RootCAs()
 	client := jira.New(jira.Options{
+		RootCAs:     rootCAs,
 		BaseURL:     base,
 		IP:          creds.Jira.IP,
 		Username:    creds.Jira.Username,
