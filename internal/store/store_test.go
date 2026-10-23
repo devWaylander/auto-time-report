@@ -2,64 +2,18 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/devWaylander/auto-time-report/internal/store/storetest"
 )
 
-// newTestStore создаёт базу во временной папке и накатывает на неё up-части миграций,
-// повторяя то, что делает dbmate
+// newTestStore создаёт базу во временной папке с накатанными миграциями
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "test.db")
-
-	raw, err := sql.Open("sqlite", "file:"+path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := raw.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-
-	if _, err := raw.Exec(`CREATE TABLE schema_migrations (version TEXT PRIMARY KEY)`); err != nil {
-		t.Fatal(err)
-	}
-
-	files, err := filepath.Glob("../../db/migrations/*.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(files) == 0 {
-		t.Fatal("no migrations found")
-	}
-	sort.Strings(files)
-
-	for _, f := range files {
-		body, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		up, _, ok := strings.Cut(string(body), "-- migrate:down")
-		if !ok {
-			t.Fatalf("%s: no migrate:down section", f)
-		}
-		if _, err := raw.Exec(up); err != nil {
-			t.Fatalf("%s: %v", f, err)
-		}
-		version, _, _ := strings.Cut(filepath.Base(f), "_")
-		if _, err := raw.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, version); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	s, err := Open(context.Background(), "sqlite:"+path)
+	s, err := Open(context.Background(), storetest.NewDatabaseURL(t))
 	if err != nil {
 		t.Fatal(err)
 	}
