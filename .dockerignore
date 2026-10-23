@@ -4,3 +4,6 @@
 .vscode
 data
 bin
+secrets
+*.ovpn
+docker/vpn
