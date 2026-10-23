@@ -46,7 +46,7 @@ CREATE TABLE week_posts (
 
 CREATE INDEX week_posts_user_posted ON week_posts (user_id, posted_at);
 
--- Успешно записанные worklog'и: одна строка на пару «задача + дата»
+-- Успешно записанные worklog'и: одна строка на пару "задача + дата"
 CREATE TABLE submissions (
     id               INTEGER PRIMARY KEY,
     user_id          INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,

@@ -28,7 +28,7 @@ const (
 type weekState struct {
 	post   store.WeekPost
 	report parser.Report
-	// Уже записанные worklog'и по ключу «задача|дата»
+	// Уже записанные worklog'и по ключу "задача|дата"
 	submitted map[string]store.Submission
 	// Периоды с записанными worklog'ами, ещё не отправленные на проверку
 	unapproved []int64
@@ -120,7 +120,7 @@ type dayLine struct {
 	Date      time.Time
 	Kind      calendar.DayKind
 	Total     time.Duration
-	Issues    []string // «ABC-1 6ч», если задач за день больше одной
+	Issues    []string // "ABC-1 6ч", если задач за день больше одной
 	Submitted int      // сколько worklog'ов дня уже в Jira
 	Worklogs  int
 }
