@@ -1,5 +1,4 @@
-// Точка входа бота. Пока только подключается к базе и ждёт сигнала остановки:
-// Telegram, Jira и VPN появятся следующими шагами
+// Точка входа бота: конфиг, база, напоминания и Telegram
 package main
 
 import (
@@ -13,6 +12,11 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/devWaylander/auto-time-report/internal/bot"
+	"github.com/devWaylander/auto-time-report/internal/calendar"
+	"github.com/devWaylander/auto-time-report/internal/config"
+	"github.com/devWaylander/auto-time-report/internal/corp"
+	"github.com/devWaylander/auto-time-report/internal/notify"
 	"github.com/devWaylander/auto-time-report/internal/store"
 )
 
@@ -29,16 +33,15 @@ func run() error {
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		return errors.New("DATABASE_URL is not set")
-	}
-
-	st, err := store.Open(ctx, databaseURL)
+	st, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -48,8 +51,32 @@ func run() error {
 		}
 	}()
 
+	user, err := st.EnsureUser(ctx, cfg.TelegramOwnerID)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(cfg.CredsFile); err != nil {
+		// Без хранилища бот всё равно полезен: пост, превью, напоминания. Отправка скажет об ошибке сама
+		slog.Warn("creds file is not available, submitting to Jira will fail", "error", err)
+	}
+
+	cal := calendar.New(cfg.CalendarURL)
+	runner := corp.NewRunner(cfg.CredsFile, corp.NewTunnel(cfg.VPNRunDir, cfg.ConnectTimeout), cfg.StartTime)
+	b, err := bot.New(bot.Config{
+		Token:        cfg.TelegramToken,
+		OwnerID:      cfg.TelegramOwnerID,
+		ChannelID:    cfg.TelegramChannelID,
+		DefaultIssue: cfg.DefaultIssue,
+		Location:     cfg.Timezone,
+	}, st, cal, runner, user.ID)
+	if err != nil {
+		return err
+	}
+
+	go notify.New(st, cal, b, cfg.Timezone, user.ID, cfg.DefaultIssue).Run(ctx)
+
 	slog.Info("bot started")
-	<-ctx.Done()
+	b.Start(ctx)
 	slog.Info("shutting down")
 	return nil
 }
