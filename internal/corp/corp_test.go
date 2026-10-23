@@ -136,12 +136,12 @@ func fakeOpenVPN(t *testing.T, dir, wantPass string, fail bool) <-chan []string 
 			t.Error(err)
 			return
 		}
-		defer ln.Close()
+		defer func() { _ = ln.Close() }()
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		var cmds []string
 		w := bufio.NewWriter(conn)
 		say := func(s string) { _, _ = w.WriteString(s + "\r\n"); _ = w.Flush() }
