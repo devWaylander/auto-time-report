@@ -206,6 +206,19 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 	return report, nil
 }
 
+// LooksLikePost — похоже ли сообщение на пост с временем: первая непустая строка — дата или ключ задачи.
+// Нужно, чтобы бот не принимал за пост недели другие заметки в канале
+func LooksLikePost(text string) bool {
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(strings.ReplaceAll(raw, " ", " "))
+		if line == "" {
+			continue
+		}
+		return dateLineRe.MatchString(line) || issueLineRe.MatchString(line)
+	}
+	return false
+}
+
 type worklogKey struct {
 	issue string
 	date  time.Time

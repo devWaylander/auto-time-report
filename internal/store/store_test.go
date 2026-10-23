@@ -173,6 +173,17 @@ func TestVacations(t *testing.T) {
 		}
 	}
 
+	upcoming, err := s.UpcomingVacations(ctx, u.ID, date(t, "2026-10-31"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(upcoming) != 1 || !upcoming[0].Start.Equal(date(t, "2026-10-27")) {
+		t.Fatalf("upcoming vacations = %+v", upcoming)
+	}
+	if upcoming, _ := s.UpcomingVacations(ctx, u.ID, date(t, "2026-11-01")); len(upcoming) != 0 {
+		t.Fatalf("finished vacation is still upcoming: %+v", upcoming)
+	}
+
 	if err := s.CancelVacations(ctx, u.ID, date(t, "2026-10-28")); err != nil {
 		t.Fatal(err)
 	}
