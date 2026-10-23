@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// User — пользователь бота, привязан к Telegram-аккаунту
+// User - пользователь бота, привязан к Telegram-аккаунту
 type User struct {
 	ID         int64
 	TelegramID int64

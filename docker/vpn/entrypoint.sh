@@ -4,7 +4,7 @@ set -eu
 
 dir="${VPN_RUN_DIR:-/run/vpn}"
 cfg="$dir/client.ovpn"
-# Сокет и файлы доступны группе бота, остальным — нет
+# Сокет и файлы доступны группе бота, остальным - нет
 umask 007
 
 echo "vpn sidecar: ready"

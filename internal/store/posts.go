@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// WeekPost — недельный пост из канала в последней известной версии
+// WeekPost - недельный пост из канала в последней известной версии
 type WeekPost struct {
 	ID        int64
 	UserID    int64
@@ -16,7 +16,7 @@ type WeekPost struct {
 	MessageID int64
 	Text      string
 	PostedAt  time.Time
-	EditedAt  time.Time // нулевое значение — пост не редактировался
+	EditedAt  time.Time // нулевое значение - пост не редактировался
 }
 
 // SaveWeekPost сохраняет новый пост или обновляет текст уже известного (по chat_id и message_id)

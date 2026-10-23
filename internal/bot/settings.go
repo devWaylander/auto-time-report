@@ -76,7 +76,7 @@ func renderSettings(st store.Settings, vacations []store.Vacation, now time.Time
 		b.WriteString("🏖 Отпусков нет\n")
 	}
 	for _, v := range vacations {
-		fmt.Fprintf(&b, "🏖 Отпуск %s–%s\n", v.Start.Format("02.01"), v.End.Format("02.01.2006"))
+		fmt.Fprintf(&b, "🏖 Отпуск %s-%s\n", v.Start.Format("02.01"), v.End.Format("02.01.2006"))
 	}
 	b.WriteString("\nВыходные и праздники по производственному календарю пропускаются сами.\n" +
 		"Время: /daily 19:30, /weekly пт 16:00. Отпуск: /vacation 27.10-31.10, /vacation off")
@@ -201,10 +201,10 @@ func (b *Bot) cmdVacation(ctx context.Context, args string) {
 		b.notify(ctx, "⚠️ Не смог сохранить отпуск.")
 		return
 	}
-	b.notify(ctx, fmt.Sprintf("🏖 Отпуск %s–%s: напоминаний не будет.", start.Format("02.01.2006"), end.Format("02.01.2006")))
+	b.notify(ctx, fmt.Sprintf("🏖 Отпуск %s-%s: напоминаний не будет.", start.Format("02.01.2006"), end.Format("02.01.2006")))
 }
 
-// parseVacation разбирает «ДД.ММ-ДД.ММ». Год — ближайший, при котором отпуск ещё не закончился:
+// parseVacation разбирает «ДД.ММ-ДД.ММ». Год - ближайший, при котором отпуск ещё не закончился:
 // в декабре «05.01-10.01» значит январь следующего года
 func parseVacation(s string, today time.Time) (time.Time, time.Time, error) {
 	from, to, ok := strings.Cut(strings.ReplaceAll(s, " ", ""), "-")

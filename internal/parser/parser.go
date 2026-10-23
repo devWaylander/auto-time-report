@@ -14,21 +14,21 @@ import (
 	"unicode/utf8"
 )
 
-// Entry — одна строка записи из поста
+// Entry - одна строка записи из поста
 type Entry struct {
 	Line     int
 	Text     string
 	Duration time.Duration
 }
 
-// Worklog — все записи одной задачи за один день, в Jira уходит одним worklog'ом
+// Worklog - все записи одной задачи за один день, в Jira уходит одним worklog'ом
 type Worklog struct {
 	IssueKey string
 	Date     time.Time
 	Entries  []Entry
 }
 
-// Duration — суммарное время worklog'а
+// Duration - суммарное время worklog'а
 func (w Worklog) Duration() time.Duration {
 	var total time.Duration
 	for _, e := range w.Entries {
@@ -37,7 +37,7 @@ func (w Worklog) Duration() time.Duration {
 	return total
 }
 
-// Comment — строки записей как в посте, через пустую строку
+// Comment - строки записей как в посте, через пустую строку
 func (w Worklog) Comment() string {
 	lines := make([]string, len(w.Entries))
 	for i, e := range w.Entries {
@@ -46,7 +46,7 @@ func (w Worklog) Comment() string {
 	return strings.Join(lines, "\n\n")
 }
 
-// Report — разобранный пост, worklog'и отсортированы по дате, затем по задаче
+// Report - разобранный пост, worklog'и отсортированы по дате, затем по задаче
 type Report struct {
 	Worklogs []Worklog
 }
@@ -62,7 +62,7 @@ func (r Report) Dates() []time.Time {
 	return dates
 }
 
-// DayTotal — сумма по всем задачам за дату
+// DayTotal - сумма по всем задачам за дату
 func (r Report) DayTotal(date time.Time) time.Duration {
 	var total time.Duration
 	for _, w := range r.Worklogs {
@@ -73,7 +73,7 @@ func (r Report) DayTotal(date time.Time) time.Duration {
 	return total
 }
 
-// Total — сумма за весь пост
+// Total - сумма за весь пост
 func (r Report) Total() time.Duration {
 	var total time.Duration
 	for _, w := range r.Worklogs {
@@ -82,7 +82,7 @@ func (r Report) Total() time.Duration {
 	return total
 }
 
-// LineError — ошибка формата в конкретной строке поста
+// LineError - ошибка формата в конкретной строке поста
 type LineError struct {
 	Line int
 	Msg  string
@@ -111,7 +111,7 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 		// Первая строка, где для пары «задача + дата» встретилась дата, для сообщения о повторе
 		dateLines = map[worklogKey]int{}
 		issue     = defaultIssue
-		// Нулевая дата — даты ещё нет или задача только что сменилась
+		// Нулевая дата - даты ещё нет или задача только что сменилась
 		date time.Time
 		// Дата в строке битая: записи под ней пропускаем молча, ошибка уже показана
 		badDate bool
@@ -206,7 +206,7 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 	return report, nil
 }
 
-// LooksLikePost — похоже ли сообщение на пост с временем: первая непустая строка — дата или ключ задачи.
+// LooksLikePost - похоже ли сообщение на пост с временем: первая непустая строка - дата или ключ задачи.
 // Нужно, чтобы бот не принимал за пост недели другие заметки в канале
 func LooksLikePost(text string) bool {
 	for _, raw := range strings.Split(text, "\n") {
@@ -242,7 +242,7 @@ func firstLineOf(r Report, date time.Time) int {
 	return line
 }
 
-// resolveDate подбирает год, при котором дата ближе всего к сегодня; будущие даты — ошибка
+// resolveDate подбирает год, при котором дата ближе всего к сегодня; будущие даты - ошибка
 func resolveDate(m []string, today time.Time) (time.Time, error) {
 	day, _ := strconv.Atoi(m[1])
 	month, _ := strconv.Atoi(m[2])

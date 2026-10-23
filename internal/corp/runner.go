@@ -1,4 +1,4 @@
-// Package corp — всё, что касается корпоративной сети: зашифрованные доступы, VPN и запись в Jira.
+// Package corp - всё, что касается корпоративной сети: зашифрованные доступы, VPN и запись в Jira.
 // Бот зависит от него только через интерфейс, поэтому пакет можно вынести на отдельную машину
 package corp
 
@@ -13,7 +13,7 @@ import (
 	"github.com/devWaylander/auto-time-report/internal/jira"
 )
 
-// WorklogJob — один worklog к записи
+// WorklogJob - один worklog к записи
 type WorklogJob struct {
 	IssueKey string
 	Date     time.Time
@@ -21,7 +21,7 @@ type WorklogJob struct {
 	Comment  string
 }
 
-// Job — что сделать за одну сессию
+// Job - что сделать за одну сессию
 type Job struct {
 	Worklogs []WorklogJob
 	// Периоды, в которые бот уже писал раньше: при отправке на проверку они тоже уходят
@@ -52,9 +52,9 @@ type Outcome struct {
 	CalendarURL string
 }
 
-// Hooks — обратная связь во время отправки
+// Hooks - обратная связь во время отправки
 type Hooks struct {
-	// Progress — короткие сообщения о ходе отправки для пользователя
+	// Progress - короткие сообщения о ходе отправки для пользователя
 	Progress func(msg string)
 	// Created вызывается сразу после каждого созданного worklog'а, чтобы бот успел его сохранить;
 	// ошибка останавливает отправку, иначе в Jira окажутся worklog'и, о которых бот не знает
@@ -91,8 +91,8 @@ func (r *Runner) Run(ctx context.Context, passphrase []byte, job Job, hooks Hook
 	defer cancel()
 
 	if creds.VPN != nil {
-		hooks.Progress("🔐 Поднимаю VPN. Сейчас придёт ОДИН пуш Multifactor — подтверди его.\n" +
-			"Пришёл второй пуш или пуш без твоего нажатия — отклоняй.")
+		hooks.Progress("🔐 Поднимаю VPN. Сейчас придёт ОДИН пуш Multifactor - подтверди его.\n" +
+			"Пришёл второй пуш или пуш без твоего нажатия - отклоняй.")
 		sess, err := r.tunnel.Up(ctx, *creds.VPN)
 		if err != nil {
 			return Outcome{}, err

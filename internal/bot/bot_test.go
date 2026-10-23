@@ -36,7 +36,7 @@ func (f fakeCalendar) Day(_ context.Context, date time.Time) (calendar.DayKind, 
 	return calendar.Working, nil
 }
 
-// newTestBot — бот без Telegram: хватает для логики поверх базы и календаря
+// newTestBot - бот без Telegram: хватает для логики поверх базы и календаря
 func newTestBot(t *testing.T, cal fakeCalendar) (*Bot, *store.Store) {
 	t.Helper()
 	st, err := store.Open(context.Background(), storetest.NewDatabaseURL(t))
@@ -117,7 +117,7 @@ func TestPreviewInputAndRender(t *testing.T) {
 	}
 
 	in := b.previewInput(ctx, w)
-	// Пн–Пт рабочие, пятница сокращённая: 8*4 + 7
+	// Пн-Пт рабочие, пятница сокращённая: 8*4 + 7
 	if in.Norm != 39*time.Hour || in.Total != 16*time.Hour {
 		t.Fatalf("norm %v total %v", in.Norm, in.Total)
 	}
@@ -130,11 +130,11 @@ func TestPreviewInputAndRender(t *testing.T) {
 
 	text := renderPreview(in)
 	for _, want := range []string{
-		"Неделя 19.10–23.10.2026",
-		"Пн 19.10 — 8ч ✅",
-		"Вт 20.10 — 8ч",
+		"Неделя 19.10-23.10.2026",
+		"Пн 19.10 - 8ч ✅",
+		"Вт 20.10 - 8ч",
 		"ABC-1 6ч, ABC-2 2ч",
-		"Пт 23.10 — — <i>(сокращённый)</i>",
+		"Пт 23.10 - - <i>(сокращённый)</i>",
 		"<b>Итого: 16ч</b> из 39ч по норме (не хватает 23ч)",
 		"К записи в Jira: 2",
 	} {
@@ -237,7 +237,7 @@ func TestRenderOutcome(t *testing.T) {
 		CalendarURL: "https://jira.example.com/secure/WorklogPROWorklogCalendar!default.jspa",
 	}
 	text := renderOutcome(o, errors.New("boom"))
-	for _, want := range []string{"Остановился", "19.10 ABC-1 8ч — записано", "20.10 ABC-1 8ч — ошибка", "21.10 ABC-1 8ч — не дошёл", "Период 228"} {
+	for _, want := range []string{"Остановился", "19.10 ABC-1 8ч - записано", "20.10 ABC-1 8ч - ошибка", "21.10 ABC-1 8ч - не дошёл", "Период 228"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("outcome has no %q:\n%s", want, text)
 		}

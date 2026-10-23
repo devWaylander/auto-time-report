@@ -1,4 +1,4 @@
-// Package bot — Telegram-интерфейс: читает пост недели из канала, показывает превью, принимает
+// Package bot - Telegram-интерфейс: читает пост недели из канала, показывает превью, принимает
 // пароль-фразу и запускает отправку. Общается только с владельцем, всех остальных молча игнорирует
 package bot
 
@@ -22,7 +22,7 @@ import (
 	"github.com/devWaylander/auto-time-report/internal/store"
 )
 
-// Runner — корпоративная часть: расшифровка доступов, VPN, Jira. Сейчас это corp.Runner в том же процессе,
+// Runner - корпоративная часть: расшифровка доступов, VPN, Jira. Сейчас это corp.Runner в том же процессе,
 // но бот завязан только на интерфейс, чтобы её можно было вынести на другую машину
 type Runner interface {
 	Run(ctx context.Context, passphrase []byte, job corp.Job, hooks corp.Hooks) (corp.Outcome, error)
@@ -42,7 +42,7 @@ type Config struct {
 
 const (
 	passphraseTimeout = 2 * time.Minute
-	// Не больше стольких попыток отправки за час: каждая попытка — пуш MFA и логин в домен
+	// Не больше стольких попыток отправки за час: каждая попытка - пуш MFA и логин в домен
 	maxAttemptsPerHour = 3
 )
 
@@ -98,7 +98,7 @@ func (b *Bot) handle(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	}
 }
 
-// fromOwner — личное сообщение от владельца; всё остальное бот не видит
+// fromOwner - личное сообщение от владельца; всё остальное бот не видит
 func (b *Bot) fromOwner(msg *models.Message) bool {
 	return msg.From != nil && msg.From.ID == b.cfg.OwnerID && msg.Chat.ID == b.cfg.OwnerID
 }
@@ -122,7 +122,7 @@ func (b *Bot) onError(err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	b.notify(ctx, "🚨 Токеном бота пользуется ещё кто-то (Telegram вернул 409 Conflict).\n"+
-		"Если это не твой второй запуск бота — перевыпусти токен в @BotFather и не отправляй пароль-фразу, пока не разберёшься.")
+		"Если это не твой второй запуск бота - перевыпусти токен в @BotFather и не отправляй пароль-фразу, пока не разберёшься.")
 }
 
 // redact убирает токен бота из текста: библиотека кладёт URL с токеном в ошибки сети
@@ -157,7 +157,7 @@ func (b *Bot) send(ctx context.Context, text string, markup models.ReplyMarkup) 
 	return msg, nil
 }
 
-// notify — send без ответа: ошибку только логируем
+// notify - send без ответа: ошибку только логируем
 func (b *Bot) notify(ctx context.Context, text string) {
 	if _, err := b.send(ctx, text, nil); err != nil {
 		slog.Error("send message", "error", err)
@@ -266,7 +266,7 @@ func (b *Bot) changedSubmitted(ctx context.Context, report parser.Report) (strin
 	if len(lines) == 0 {
 		return "", nil
 	}
-	return "⚠️ Ты поправил дни, которые уже записаны в Jira. Бот их не перезаписывает — поправь руками в календаре WorklogPRO:\n" +
+	return "⚠️ Ты поправил дни, которые уже записаны в Jira. Бот их не перезаписывает - поправь руками в календаре WorklogPRO:\n" +
 		strings.Join(lines, "\n"), nil
 }
 
@@ -285,7 +285,7 @@ func (b *Bot) onMessage(ctx context.Context, msg *models.Message) {
 			slog.Error("delete stray message", "error", err)
 		}
 		b.notify(ctx, "🧹 Удалил твоё сообщение: я понимаю только команды и кнопки. "+
-			"Если это была пароль-фраза — нажми кнопку отправки заново.\n/help — список команд")
+			"Если это была пароль-фраза - нажми кнопку отправки заново.\n/help - список команд")
 		return
 	}
 
@@ -312,7 +312,7 @@ func (b *Bot) onMessage(ctx context.Context, msg *models.Message) {
 	case "/unlock":
 		b.cmdUnlock(ctx)
 	default:
-		b.notify(ctx, "Не знаю такой команды. /help — список команд")
+		b.notify(ctx, "Не знаю такой команды. /help - список команд")
 	}
 }
 
@@ -347,14 +347,14 @@ const helpText = `<b>Что я умею</b>
 
 Пиши пост недели в канал как обычно: я сам вижу каждую правку и пишу сюда, если нашёл ошибку.
 
-/status — превью недели
-/submit — превью с кнопками отправки в Jira
-/settings — напоминания и пауза
-/daily 19:30 — время ежедневного напоминания
-/weekly пт 16:00 — день и время недельного превью
-/vacation 27.10-31.10 — отпуск без напоминаний, /vacation off — отменить
-/cancel — отменить ожидание пароль-фразы
-/unlock — снять блокировку после ошибки доступа
+/status - превью недели
+/submit - превью с кнопками отправки в Jira
+/settings - напоминания и пауза
+/daily 19:30 - время ежедневного напоминания
+/weekly пт 16:00 - день и время недельного превью
+/vacation 27.10-31.10 - отпуск без напоминаний, /vacation off - отменить
+/cancel - отменить ожидание пароль-фразы
+/unlock - снять блокировку после ошибки доступа
 
 Пароль-фразу отправляй <b>только</b> в ответ на мой запрос, который пришёл сразу после твоего нажатия кнопки.`
 
