@@ -1,8 +1,9 @@
 name: auto-time-report
 
 # База лежит в ./data на хосте: локальный запуск и Docker работают с одним и тем же файлом.
-# Контейнеры запускаются под твоим UID/GID, чтобы файлы в ./data и db/migrations принадлежали тебе
-x-user: &user "${UID:-1000}:${GID:-1000}"
+# Контейнеры запускаются под твоим UID/GID, чтобы файлы в ./data, secrets и db/migrations принадлежали тебе.
+# HOST_UID и HOST_GID экспортирует Makefile: UID в bash не экспортируется, а GID в нём нет вовсе
+x-user: &user "${HOST_UID:-1000}:${HOST_GID:-1000}"
 
 # Общее для долгоживущих контейнеров: read-only ФС, без capability, без core dump, логи с ротацией
 x-hardening: &hardening
@@ -40,7 +41,7 @@ services:
     <<: *hardening
     build: ./docker/vpn
     # Root без CAP_DAC_OVERRIDE работает с файлами через группу бота: так он читает конфиг, а бот - сокет
-    user: "0:${GID:-1000}"
+    user: "0:${HOST_GID:-1000}"
     cap_add: [NET_ADMIN]
     devices:
       - /dev/net/tun:/dev/net/tun
@@ -77,6 +78,8 @@ services:
       - vpn-run:/run/vpn
     tmpfs:
       - /tmp
+    # При остановке бот дожидается текущей отправки и гасит туннель
+    stop_grace_period: 30s
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -96,4 +99,4 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: "uid=${UID:-1000},gid=${GID:-1000},mode=0770,size=1m"
+      o: "uid=${HOST_UID:-1000},gid=${HOST_GID:-1000},mode=0770,size=1m"

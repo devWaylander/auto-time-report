@@ -3,6 +3,9 @@
 .DEFAULT_GOAL := help
 
 BIN     := bin/bot
+# Под этим пользователем работают контейнеры, см. docker-compose.yml
+export HOST_UID := $(shell id -u)
+export HOST_GID := $(shell id -g)
 # --env-file /dev/null: .env нужен только контейнеру бота (env_file), подстановки в compose-файле из него не берём,
 # иначе compose пытается раскрыть $ в паролях и сыплет предупреждениями
 COMPOSE := docker compose --env-file /dev/null
@@ -81,6 +84,7 @@ vault: secrets ## Создать хранилище доступов: make vault
 
 .PHONY: up
 up: data ## Собрать и поднять всё в Docker (миграции накатятся сами)
+	@test "$(HOST_UID)" != "0" || { echo "Не запускай от root: контейнеры работают под твоим пользователем"; exit 1; }
 	@test -f secrets/telegram_bot_token && test -f secrets/creds.age || { echo "Нет секретов: make token и make vault"; exit 1; }
 	$(COMPOSE) up -d --build
 
