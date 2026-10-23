@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"regexp"
 	"strconv"
@@ -193,7 +194,7 @@ func (b *Bot) cmdVacation(ctx context.Context, args string) {
 
 	start, end, err := parseVacation(args, today)
 	if err != nil {
-		b.notify(ctx, "Формат: /vacation 27.10-31.10 ("+err.Error()+")")
+		b.notify(ctx, "Формат: /vacation 27.10-31.10 ("+html.EscapeString(err.Error())+")")
 		return
 	}
 	if _, err := b.store.AddVacation(ctx, b.userID, start, end); err != nil {

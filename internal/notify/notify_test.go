@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -15,9 +16,15 @@ var tz = time.FixedZone("UTC+7", 7*60*60)
 type fakeOutput struct {
 	daily  []time.Time
 	weekly int
+	// Сколько следующих отправок упадёт
+	failures int
 }
 
 func (f *fakeOutput) DailyReminder(_ context.Context, date time.Time) error {
+	if f.failures > 0 {
+		f.failures--
+		return errors.New("telegram is down")
+	}
 	f.daily = append(f.daily, date)
 	return nil
 }
@@ -60,7 +67,7 @@ func at(d, h, m int) time.Time {
 
 func savePost(t *testing.T, st *store.Store, u store.User, text string) {
 	t.Helper()
-	_, err := st.SaveWeekPost(context.Background(), store.WeekPost{
+	_, _, err := st.SaveWeekPost(context.Background(), store.WeekPost{
 		UserID: u.ID, ChatID: -100, MessageID: 1, Text: text, PostedAt: at(19, 9, 0),
 	})
 	if err != nil {
@@ -200,5 +207,42 @@ func TestDisabled(t *testing.T) {
 	}
 	if len(out.daily) != 0 || out.weekly != 0 {
 		t.Fatalf("reminders while disabled: %+v", out)
+	}
+}
+
+func TestFailedReminderIsRetried(t *testing.T) {
+	n, out, _, _ := setup(t, nil)
+	ctx := context.Background()
+	out.failures = 1
+
+	if err := n.Tick(ctx, at(20, 19, 0)); err == nil {
+		t.Fatal("expected error from failed delivery")
+	}
+	if err := n.Tick(ctx, at(20, 19, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.daily) != 1 {
+		t.Fatalf("daily reminders = %d, want 1 after retry", len(out.daily))
+	}
+}
+
+func TestWeeklyPreviewMovesOffHoliday(t *testing.T) {
+	// Пятница 23.10 - праздник: превью приходит в четверг
+	n, out, _, _ := setup(t, fakeCalendar{"2026-10-23": calendar.Off})
+	ctx := context.Background()
+	if err := n.Tick(ctx, at(22, 16, 30)); err != nil {
+		t.Fatal(err)
+	}
+	if out.weekly != 1 {
+		t.Fatalf("weekly previews on Thursday = %d, want 1", out.weekly)
+	}
+
+	// Обычная неделя: в четверг превью нет
+	n2, out2, _, _ := setup(t, nil)
+	if err := n2.Tick(ctx, at(22, 16, 30)); err != nil {
+		t.Fatal(err)
+	}
+	if out2.weekly != 0 {
+		t.Fatal("weekly preview on Thursday of a normal week")
 	}
 }

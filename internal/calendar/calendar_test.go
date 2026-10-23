@@ -44,7 +44,9 @@ func TestDay(t *testing.T) {
 }
 
 func TestDayFallback(t *testing.T) {
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
@@ -57,6 +59,9 @@ func TestDayFallback(t *testing.T) {
 	}
 	if got, err := c.Day(context.Background(), mon); err == nil || got != Working {
 		t.Fatalf("Day(mon) = %v, %v; want Working with error", got, err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("calendar fetched %d times after a failure, want 1 until retry interval passes", calls.Load())
 	}
 }
 

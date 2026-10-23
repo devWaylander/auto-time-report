@@ -81,7 +81,7 @@ func (b *Bot) onSubmitButton(ctx context.Context, cq *models.CallbackQuery, mess
 	b.mu.Lock()
 	b.pending = &pendingSubmit{
 		postID: postID, hash: hash, approve: approve,
-		promptID: prompt.ID, expires: time.Now().Add(passphraseTimeout),
+		promptID: prompt.ID, expires: b.clock().Add(passphraseTimeout),
 	}
 	b.mu.Unlock()
 }
@@ -94,7 +94,7 @@ func (b *Bot) refusalLocked() string {
 	case b.locked:
 		return "🔒 Отправка заблокирована после ошибки доступа. Проверь доступы и пришли /unlock"
 	}
-	cutoff := time.Now().Add(-time.Hour)
+	cutoff := b.clock().Add(-time.Hour)
 	recent := b.attempts[:0]
 	for _, a := range b.attempts {
 		if a.After(cutoff) {
@@ -113,18 +113,20 @@ func (b *Bot) refusalLocked() string {
 func (b *Bot) takePassphrase(ctx context.Context, msg *models.Message) bool {
 	b.mu.Lock()
 	p := b.pending
-	if p == nil || strings.HasPrefix(msg.Text, "/") {
+	// Пока ждём фразу, берём любой текст, кроме /cancel: фраза вполне может начинаться со слэша
+	if p == nil || isCancel(msg.Text) {
 		b.mu.Unlock()
 		return false
 	}
 	b.pending = nil
-	expired := time.Now().After(p.expires)
+	expired := b.clock().After(p.expires)
 	refusal := ""
 	if !expired {
 		refusal = b.refusalLocked()
 		if refusal == "" {
 			b.running = true
-			b.attempts = append(b.attempts, time.Now())
+			b.attempts = append(b.attempts, b.clock())
+			b.inflight.Add(1)
 		}
 	}
 	b.mu.Unlock()
@@ -167,14 +169,23 @@ func (b *Bot) cancelPending(ctx context.Context) {
 	b.notify(ctx, "Отменил, пароль-фразу больше не жду.")
 }
 
-// runSubmit отправляет неделю. Вызывается с b.running = true и сбрасывает его в конце
+func isCancel(text string) bool {
+	cmd, _, _ := strings.Cut(strings.TrimSpace(text), " ")
+	cmd, _, _ = strings.Cut(cmd, "@")
+	return cmd == "/cancel"
+}
+
+// runSubmit отправляет неделю. Вызывается с b.running = true и b.inflight.Add(1), сбрасывает их в конце
 func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte) {
 	defer clear(passphrase)
 	defer func() {
 		b.mu.Lock()
 		b.running = false
 		b.mu.Unlock()
+		b.inflight.Done()
 	}()
+	// Запись в базу не отменяем даже при остановке бота: worklog уже в Jira, бот обязан о нём помнить
+	dbCtx := context.WithoutCancel(ctx)
 
 	status, err := b.send(ctx, "⏳ Начинаю отправку…", nil)
 	if err != nil {
@@ -202,7 +213,7 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 	hooks := corp.Hooks{
 		Progress: progress,
 		Created: func(r corp.WorklogResult) error {
-			_, err := b.store.SaveSubmission(ctx, store.Submission{
+			_, err := b.store.SaveSubmission(dbCtx, store.Submission{
 				UserID: b.userID, WeekPostID: w.post.ID, IssueKey: r.Job.IssueKey, WorkDate: r.Job.Date,
 				Duration: r.Job.Duration, Comment: r.Job.Comment, WorklogID: r.WorklogID, PeriodID: r.PeriodID,
 			})
@@ -211,7 +222,7 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 	}
 	outcome, runErr := b.runner.Run(ctx, passphrase, job, hooks)
 	for _, period := range outcome.Approved {
-		if err := b.store.MarkPeriodRequested(ctx, b.userID, period); err != nil {
+		if err := b.store.MarkPeriodRequested(dbCtx, b.userID, period); err != nil {
 			slog.Error("mark period requested", "period", period, "error", err)
 		}
 	}
@@ -225,7 +236,7 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 		slog.Error("submit", "error", runErr)
 	}
 	progress("Отправка завершена, итог ниже.")
-	b.notify(ctx, renderOutcome(outcome, runErr))
+	b.notify(dbCtx, renderOutcome(outcome, runErr))
 }
 
 func isAuthError(err error) bool {

@@ -88,10 +88,29 @@ func (n *Notifier) Tick(ctx context.Context, now time.Time) error {
 	if st.DailyEnabled && reached(now, today, st.DailyTime) {
 		errs = append(errs, n.daily(ctx, now, today))
 	}
-	if st.WeeklyEnabled && today.Weekday() == st.WeeklyWeekday && reached(now, today, st.WeeklyTime) {
-		errs = append(errs, n.weekly(ctx, today))
+	if st.WeeklyEnabled && reached(now, today, st.WeeklyTime) {
+		day, err := n.weeklyDay(ctx, today, st.WeeklyWeekday)
+		if err != nil {
+			errs = append(errs, err)
+		} else if day.Equal(today) {
+			errs = append(errs, n.weekly(ctx, today))
+		}
 	}
 	return errors.Join(errs...)
+}
+
+// weeklyDay - в какой день этой недели слать превью: выбранный день, а если он выходной или праздник,
+// ближайший рабочий день перед ним на той же неделе
+func (n *Notifier) weeklyDay(ctx context.Context, today time.Time, weekday time.Weekday) (time.Time, error) {
+	monday := today.AddDate(0, 0, -((int(today.Weekday()) + 6) % 7))
+	day := monday.AddDate(0, 0, (int(weekday)+6)%7)
+	for ; !day.Before(monday); day = day.AddDate(0, 0, -1) {
+		kind, _ := n.cal.Day(ctx, day)
+		if kind != calendar.Off {
+			return day, nil
+		}
+	}
+	return time.Time{}, nil
 }
 
 func (n *Notifier) daily(ctx context.Context, now, today time.Time) error {
@@ -99,19 +118,24 @@ func (n *Notifier) daily(ctx context.Context, now, today time.Time) error {
 	if err != nil || has {
 		return err
 	}
-	claimed, err := n.store.ClaimNotification(ctx, n.userID, store.NotificationDaily, today)
-	if err != nil || !claimed {
-		return err
-	}
-	return n.out.DailyReminder(ctx, today)
+	return n.send(ctx, store.NotificationDaily, today, func() error { return n.out.DailyReminder(ctx, today) })
 }
 
 func (n *Notifier) weekly(ctx context.Context, today time.Time) error {
-	claimed, err := n.store.ClaimNotification(ctx, n.userID, store.NotificationWeekly, today)
+	return n.send(ctx, store.NotificationWeekly, today, func() error { return n.out.WeeklyPreview(ctx) })
+}
+
+// send отправляет напоминание не больше раза за день; если отправить не вышло, следующая проверка попробует снова
+func (n *Notifier) send(ctx context.Context, kind store.NotificationKind, day time.Time, deliver func() error) error {
+	claimed, err := n.store.ClaimNotification(ctx, n.userID, kind, day)
 	if err != nil || !claimed {
 		return err
 	}
-	return n.out.WeeklyPreview(ctx)
+	if err := deliver(); err != nil {
+		return errors.Join(fmt.Errorf("send %s reminder: %w", kind, err),
+			n.store.ReleaseNotification(context.WithoutCancel(ctx), n.userID, kind, day))
+	}
+	return nil
 }
 
 // postHasDate - есть ли в последнем посте записи за дату. Пост с ошибками считается без записей:

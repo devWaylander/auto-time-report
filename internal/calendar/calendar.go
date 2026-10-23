@@ -40,13 +40,18 @@ type Calendar struct {
 
 	mu    sync.Mutex
 	years map[int]string
+	// Когда год последний раз не удалось загрузить: повторяем не чаще retryAfter
+	failed map[int]time.Time
 }
+
+const retryAfter = 10 * time.Minute
 
 func New(baseURL string) *Calendar {
 	return &Calendar{
 		baseURL: baseURL,
 		client:  &http.Client{Timeout: 15 * time.Second},
 		years:   map[int]string{},
+		failed:  map[int]time.Time{},
 	}
 }
 
@@ -80,11 +85,28 @@ func fallback(date time.Time) DayKind {
 
 func (c *Calendar) year(ctx context.Context, year int) (string, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if days, ok := c.years[year]; ok {
+	days, ok := c.years[year]
+	failedAt := c.failed[year]
+	c.mu.Unlock()
+	if ok {
 		return days, nil
 	}
+	if time.Since(failedAt) < retryAfter {
+		return "", fmt.Errorf("calendar %d is unavailable, retry later", year)
+	}
 
+	days, err := c.fetch(ctx, year)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err != nil {
+		c.failed[year] = time.Now()
+		return "", err
+	}
+	c.years[year] = days
+	return days, nil
+}
+
+func (c *Calendar) fetch(ctx context.Context, year int) (string, error) {
 	q := url.Values{"year": {strconv.Itoa(year)}, "pre": {"1"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/getdata?"+q.Encode(), nil)
 	if err != nil {
@@ -108,6 +130,5 @@ func (c *Calendar) year(ctx context.Context, year int) (string, error) {
 	if len(days) != want {
 		return "", fmt.Errorf("calendar %d: got %d days, want %d", year, len(days), want)
 	}
-	c.years[year] = days
 	return days, nil
 }

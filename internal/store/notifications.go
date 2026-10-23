@@ -15,8 +15,7 @@ const (
 )
 
 // ClaimNotification атомарно занимает напоминание на дату: true - его ещё не отправляли и слать нужно,
-// false - уже отправлено, в том числе до рестарта бота. Занимать нужно до отправки,
-// поэтому упавшая отправка повторно не уйдёт
+// false - уже отправлено, в том числе до рестарта бота. Если отправить не удалось, отметку снимает ReleaseNotification
 func (s *Store) ClaimNotification(ctx context.Context, userID int64, kind NotificationKind, date time.Time) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO notifications (user_id, kind, target_date) VALUES (?, ?, ?)
@@ -30,4 +29,15 @@ func (s *Store) ClaimNotification(ctx context.Context, userID int64, kind Notifi
 		return false, fmt.Errorf("notification rows affected: %w", err)
 	}
 	return n == 1, nil
+}
+
+// ReleaseNotification снимает отметку, если напоминание так и не удалось отправить: следующая проверка попробует снова
+func (s *Store) ReleaseNotification(ctx context.Context, userID int64, kind NotificationKind, date time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM notifications WHERE user_id = ? AND kind = ? AND target_date = ?`,
+		userID, string(kind), formatDate(date))
+	if err != nil {
+		return fmt.Errorf("delete notification: %w", err)
+	}
+	return nil
 }
