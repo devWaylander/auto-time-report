@@ -16,16 +16,16 @@ import (
 	"github.com/devWaylander/auto-time-report/internal/secret"
 )
 
-// ErrBadPassphrase — пароль-фраза не подошла к хранилищу
+// ErrBadPassphrase - пароль-фраза не подошла к хранилищу
 var ErrBadPassphrase = errors.New("wrong passphrase")
 
-// MinPassphraseLen — минимальная длина пароль-фразы; блоб защищён только ей
+// MinPassphraseLen - минимальная длина пароль-фразы; блоб защищён только ей
 const MinPassphraseLen = 16
 
-// Credentials — содержимое зашифрованного хранилища
+// Credentials - содержимое зашифрованного хранилища
 type Credentials struct {
 	Jira JiraCredentials `json:"jira"`
-	// VPN не задан — туннель не поднимается (локальный запуск под уже включённым корп VPN)
+	// VPN не задан - туннель не поднимается (локальный запуск под уже включённым корп VPN)
 	VPN *VPNCredentials `json:"vpn,omitempty"`
 }
 
@@ -140,7 +140,7 @@ func Seal(c Credentials, passphrase []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Open расшифровывает хранилище. Go не даёт гарантированно затереть строки, поэтому цель —
+// Open расшифровывает хранилище. Go не даёт гарантированно затереть строки, поэтому цель -
 // держать доступы в памяти секунды на время отправки, а не защититься от root на сервере
 func Open(path string, passphrase []byte) (Credentials, error) {
 	blob, err := os.ReadFile(path)

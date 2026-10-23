@@ -30,24 +30,24 @@ func main() {
 
 func run() error {
 	out := flag.String("out", "secrets/creds.age", "куда записать хранилище")
-	ovpnPath := flag.String("ovpn", "", "конфиг OpenVPN со встроенными сертификатами; пусто — без VPN")
+	ovpnPath := flag.String("ovpn", "", "конфиг OpenVPN со встроенными сертификатами; пусто - без VPN")
 	flag.Parse()
 
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return errors.New("запусти в терминале: пароли вводятся без эха")
 	}
 	if _, err := os.Stat(*out); err == nil {
-		return fmt.Errorf("%s уже существует — удали его сам, если хочешь пересоздать", *out)
+		return fmt.Errorf("%s уже существует - удали его сам, если хочешь пересоздать", *out)
 	}
 	in := bufio.NewReader(os.Stdin)
 
 	fmt.Println("Jira")
 	var c corp.Credentials
 	c.Jira.BaseURL = ask(in, "  URL (https://jira.example.com): ")
-	c.Jira.IP = ask(in, "  IP, если DNS Jira недоступен через туннель (Enter — пропустить): ")
+	c.Jira.IP = ask(in, "  IP, если DNS Jira недоступен через туннель (Enter - пропустить): ")
 	c.Jira.Username = ask(in, "  Логин: ")
 	c.Jira.Password = askSecret("  Пароль: ")
-	c.Jira.ExtraFields = ask(in, "  Поля wa_* из запроса браузера (wa_1=…&wa_2=…, Enter — нет): ")
+	c.Jira.ExtraFields = ask(in, "  Поля wa_* из запроса браузера (wa_1=…&wa_2=…, Enter - нет): ")
 
 	if *ovpnPath != "" {
 		cfg, err := os.ReadFile(*ovpnPath)

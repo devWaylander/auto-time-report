@@ -1,6 +1,6 @@
 -- migrate:up
 
--- Даты хранятся как TEXT в формате YYYY-MM-DD, моменты времени — как TEXT RFC3339 в UTC
+-- Даты хранятся как TEXT в формате YYYY-MM-DD, моменты времени - как TEXT RFC3339 в UTC
 
 CREATE TABLE users (
     id          INTEGER PRIMARY KEY,
@@ -32,7 +32,7 @@ CREATE TABLE vacations (
 
 CREATE INDEX vacations_user_dates ON vacations (user_id, start_date, end_date);
 
--- Недельные посты из канала; text — последняя версия после всех правок
+-- Недельные посты из канала; text - последняя версия после всех правок
 CREATE TABLE week_posts (
     id         INTEGER PRIMARY KEY,
     user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,

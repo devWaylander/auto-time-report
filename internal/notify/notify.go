@@ -16,9 +16,9 @@ import (
 
 // Output отправляет напоминания пользователю, реализуется ботом
 type Output interface {
-	// DailyReminder — за сегодня в посте нет записей
+	// DailyReminder - за сегодня в посте нет записей
 	DailyReminder(ctx context.Context, date time.Time) error
-	// WeeklyPreview — превью недели с кнопками отправки
+	// WeeklyPreview - превью недели с кнопками отправки
 	WeeklyPreview(ctx context.Context) error
 }
 
@@ -55,7 +55,7 @@ func (n *Notifier) Run(ctx context.Context) {
 	}
 }
 
-// Tick — одна проверка на момент now; каждое напоминание уходит не больше раза в день, даже после рестарта
+// Tick - одна проверка на момент now; каждое напоминание уходит не больше раза в день, даже после рестарта
 func (n *Notifier) Tick(ctx context.Context, now time.Time) error {
 	now = now.In(n.loc)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, n.loc)
@@ -114,7 +114,7 @@ func (n *Notifier) weekly(ctx context.Context, today time.Time) error {
 	return n.out.WeeklyPreview(ctx)
 }
 
-// postHasDate — есть ли в последнем посте записи за дату. Пост с ошибками считается без записей:
+// postHasDate - есть ли в последнем посте записи за дату. Пост с ошибками считается без записей:
 // об ошибках бот уже написал при правке, а напоминание лишним не будет
 func (n *Notifier) postHasDate(ctx context.Context, now, date time.Time) (bool, error) {
 	post, err := n.store.LatestWeekPost(ctx, n.userID)
@@ -131,7 +131,7 @@ func (n *Notifier) postHasDate(ctx context.Context, now, date time.Time) (bool, 
 	return report.DayTotal(date) > 0, nil
 }
 
-// reached — наступило ли время ЧЧ:ММ в этот день
+// reached - наступило ли время ЧЧ:ММ в этот день
 func reached(now, today time.Time, hhmm string) bool {
 	t, err := time.Parse("15:04", hhmm)
 	if err != nil {

@@ -14,7 +14,7 @@ import (
 	"github.com/devWaylander/auto-time-report/internal/secret"
 )
 
-// ErrVPNAuth — VPN-сервер отклонил логин и пароль или пуш MFA
+// ErrVPNAuth - VPN-сервер отклонил логин и пароль или пуш MFA
 var ErrVPNAuth = errors.New("vpn: authentication failed")
 
 const (
@@ -23,7 +23,7 @@ const (
 )
 
 // Tunnel управляет OpenVPN в sidecar-контейнере через общий каталог в tmpfs: бот кладёт туда конфиг,
-// sidecar запускает openvpn, дальше всё общение — через management-сокет. Пароль в файлы не пишется
+// sidecar запускает openvpn, дальше всё общение - через management-сокет. Пароль в файлы не пишется
 type Tunnel struct {
 	runDir  string
 	timeout time.Duration
@@ -33,7 +33,7 @@ func NewTunnel(runDir string, timeout time.Duration) *Tunnel {
 	return &Tunnel{runDir: runDir, timeout: timeout}
 }
 
-// Session — поднятый туннель; Close обязателен
+// Session - поднятый туннель; Close обязателен
 type Session struct {
 	conn   net.Conn
 	lines  <-chan string

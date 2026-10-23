@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// NotificationKind — тип напоминания
+// NotificationKind - тип напоминания
 type NotificationKind string
 
 const (
@@ -14,8 +14,8 @@ const (
 	NotificationWeekly NotificationKind = "weekly"
 )
 
-// ClaimNotification атомарно занимает напоминание на дату: true — его ещё не отправляли и слать нужно,
-// false — уже отправлено, в том числе до рестарта бота. Занимать нужно до отправки,
+// ClaimNotification атомарно занимает напоминание на дату: true - его ещё не отправляли и слать нужно,
+// false - уже отправлено, в том числе до рестарта бота. Занимать нужно до отправки,
 // поэтому упавшая отправка повторно не уйдёт
 func (s *Store) ClaimNotification(ctx context.Context, userID int64, kind NotificationKind, date time.Time) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `

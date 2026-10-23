@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// DayKind — тип дня по производственному календарю
+// DayKind - тип дня по производственному календарю
 type DayKind int
 
 const (
@@ -21,7 +21,7 @@ const (
 	Off
 )
 
-// Norm — сколько часов положено отработать в такой день
+// Norm - сколько часов положено отработать в такой день
 func (k DayKind) Norm() time.Duration {
 	switch k {
 	case Working:

@@ -69,12 +69,12 @@ secrets: ## Создать каталог secrets с правами только
 
 .PHONY: token
 token: secrets ## Записать токен бота в secrets/telegram_bot_token (ввод без эха)
-	@test ! -e secrets/telegram_bot_token || { echo "secrets/telegram_bot_token уже есть — удали его сам, если хочешь заменить"; exit 1; }
+	@test ! -e secrets/telegram_bot_token || { echo "secrets/telegram_bot_token уже есть - удали его сам, если хочешь заменить"; exit 1; }
 	@bash -c 'read -rsp "Токен бота: " t && echo && umask 377 && printf "%s" "$$t" > secrets/telegram_bot_token'
 	@echo "Готово: secrets/telegram_bot_token (0400)"
 
 .PHONY: vault
-vault: secrets ## Создать хранилище доступов: make vault ovpn=~/client.ovpn (без ovpn — без VPN)
+vault: secrets ## Создать хранилище доступов: make vault ovpn=~/client.ovpn (без ovpn - без VPN)
 	go run ./cmd/vault -out secrets/creds.age $(if $(ovpn),-ovpn $(ovpn))
 
 # --- Docker ---

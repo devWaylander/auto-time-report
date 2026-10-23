@@ -91,7 +91,7 @@ func TestDailyReminder(t *testing.T) {
 		t.Fatalf("daily reminders = %v, want one for 20.10", out.daily)
 	}
 
-	// День уже записан — напоминания нет
+	// День уже записан - напоминания нет
 	n2, out2, st2, u2 := setup(t, nil)
 	savePost(t, st2, u2, "20.10\nРабота - 8 часов")
 	if err := n2.Tick(ctx, at(20, 20, 0)); err != nil {
@@ -137,7 +137,7 @@ func TestWeeklyPreview(t *testing.T) {
 		t.Fatalf("weekly previews = %d, want 1", out.weekly)
 	}
 
-	// Не пятница — не шлём
+	// Не пятница - не шлём
 	n2, out2, _, _ := setup(t, nil)
 	if err := n2.Tick(ctx, at(22, 17, 0)); err != nil {
 		t.Fatal(err)

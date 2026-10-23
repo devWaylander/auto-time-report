@@ -24,7 +24,7 @@ const (
 	hideData     = "x"
 )
 
-// weekState — пост недели вместе с тем, что из него уже записано в Jira
+// weekState - пост недели вместе с тем, что из него уже записано в Jira
 type weekState struct {
 	post   store.WeekPost
 	report parser.Report
@@ -38,7 +38,7 @@ func submissionKey(issue string, date time.Time) string {
 	return issue + "|" + date.Format("2006-01-02")
 }
 
-// pendingWorklogs — worklog'и из поста, которых ещё нет в Jira
+// pendingWorklogs - worklog'и из поста, которых ещё нет в Jira
 func (w weekState) pendingWorklogs() []parser.Worklog {
 	var out []parser.Worklog
 	for _, wl := range w.report.Worklogs {
@@ -87,7 +87,7 @@ func (b *Bot) loadWeek(ctx context.Context) (weekState, error) {
 	return w, nil
 }
 
-// sendPreview присылает превью недели; withButtons — с кнопками отправки
+// sendPreview присылает превью недели; withButtons - с кнопками отправки
 func (b *Bot) sendPreview(ctx context.Context, withButtons bool) {
 	text, markup := b.buildPreview(ctx, withButtons)
 	if _, err := b.send(ctx, text, markup); err != nil {
@@ -99,7 +99,7 @@ func (b *Bot) buildPreview(ctx context.Context, withButtons bool) (string, model
 	w, err := b.loadWeek(ctx)
 	switch {
 	case errors.Is(err, errNoPost):
-		return "Поста недели пока нет. Напиши его в канал: первая строка — дата, например 19.10", nil
+		return "Поста недели пока нет. Напиши его в канал: первая строка - дата, например 19.10", nil
 	case err != nil && w.post.ID != 0:
 		return "⚠️ В посте недели ошибки, превью не собрать:\n" + formatParseErrors(err), nil
 	case err != nil:
@@ -115,7 +115,7 @@ func (b *Bot) buildPreview(ctx context.Context, withButtons bool) (string, model
 	return text, previewKeyboard(w.post.ID, hashText(w.post.Text), in.Pending, len(w.unapproved))
 }
 
-// dayLine — строка превью за один день
+// dayLine - строка превью за один день
 type dayLine struct {
 	Date      time.Time
 	Kind      calendar.DayKind
@@ -181,7 +181,7 @@ var weekdays = [...]string{"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб
 func renderPreview(in previewInput) string {
 	var b strings.Builder
 	first, last := in.Days[0].Date, in.Days[len(in.Days)-1].Date
-	fmt.Fprintf(&b, "<b>Неделя %s–%s</b>\n\n", first.Format("02.01"), last.Format("02.01.2006"))
+	fmt.Fprintf(&b, "<b>Неделя %s-%s</b>\n\n", first.Format("02.01"), last.Format("02.01.2006"))
 
 	for _, d := range in.Days {
 		mark := ""
@@ -198,11 +198,11 @@ func renderPreview(in previewInput) string {
 		case d.Kind == calendar.Short:
 			note = " <i>(сокращённый)</i>"
 		}
-		total := "—"
+		total := "-"
 		if d.Total > 0 {
 			total = parser.FormatDuration(d.Total)
 		}
-		fmt.Fprintf(&b, "%s %s — %s%s%s\n", weekdays[d.Date.Weekday()], d.Date.Format("02.01"), total, note, mark)
+		fmt.Fprintf(&b, "%s %s - %s%s%s\n", weekdays[d.Date.Weekday()], d.Date.Format("02.01"), total, note, mark)
 		if len(d.Issues) > 0 {
 			fmt.Fprintf(&b, "    <i>%s</i>\n", html.EscapeString(strings.Join(d.Issues, ", ")))
 		}
@@ -265,7 +265,7 @@ func previewKeyboard(postID int64, hash string, pending, unapproved int) models.
 	}}
 }
 
-// hashText — короткий отпечаток текста поста: кнопка превью сработает, только если пост с тех пор не менялся
+// hashText - короткий отпечаток текста поста: кнопка превью сработает, только если пост с тех пор не менялся
 func hashText(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:5])
@@ -276,14 +276,14 @@ func weekStart(d time.Time) time.Time {
 	return d.AddDate(0, 0, -offset)
 }
 
-// DailyReminder — напоминание notify: за сегодня в посте нет записей
+// DailyReminder - напоминание notify: за сегодня в посте нет записей
 func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
 	_, err := b.send(ctx, fmt.Sprintf("📝 За сегодня (%s %s) в посте недели нет записей. Не забудь дописать.",
 		strings.ToLower(weekdays[date.Weekday()]), date.Format("02.01")), nil)
 	return err
 }
 
-// WeeklyPreview — напоминание notify: превью недели с кнопками
+// WeeklyPreview - напоминание notify: превью недели с кнопками
 func (b *Bot) WeeklyPreview(ctx context.Context) error {
 	text, markup := b.buildPreview(ctx, true)
 	_, err := b.send(ctx, "🗓 Конец недели, пора отправлять.\n\n"+text, markup)

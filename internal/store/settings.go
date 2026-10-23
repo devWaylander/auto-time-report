@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Settings — настройки напоминаний пользователя
+// Settings - настройки напоминаний пользователя
 type Settings struct {
 	UserID        int64
 	DailyEnabled  bool
@@ -16,11 +16,11 @@ type Settings struct {
 	WeeklyEnabled bool
 	WeeklyWeekday time.Weekday
 	WeeklyTime    string    // ЧЧ:ММ в часовом поясе бота
-	PausedUntil   time.Time // нулевое значение — паузы нет
+	PausedUntil   time.Time // нулевое значение - паузы нет
 	UpdatedAt     time.Time
 }
 
-// Vacation — отпуск, обе даты включительно
+// Vacation - отпуск, обе даты включительно
 type Vacation struct {
 	ID     int64
 	UserID int64

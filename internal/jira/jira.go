@@ -1,5 +1,5 @@
 // Package jira ходит в Jira Server и плагин WorklogPRO: создаёт worklog'и и отправляет периоды на проверку.
-// Разбор API — в docs/jira-api.md
+// Разбор API - в docs/jira-api.md
 package jira
 
 import (
@@ -20,11 +20,11 @@ import (
 )
 
 var (
-	// ErrAuth — Jira не приняла логин и пароль. Повторять нельзя: после нескольких попыток включится CAPTCHA
+	// ErrAuth - Jira не приняла логин и пароль. Повторять нельзя: после нескольких попыток включится CAPTCHA
 	ErrAuth = errors.New("jira: authentication failed")
-	// ErrIssueNotFound — задачи нет или к ней нет доступа
+	// ErrIssueNotFound - задачи нет или к ней нет доступа
 	ErrIssueNotFound = errors.New("jira: issue not found")
-	// ErrUnknownResult — запрос ушёл, но по ответу нельзя понять, создан ли worklog
+	// ErrUnknownResult - запрос ушёл, но по ответу нельзя понять, создан ли worklog
 	ErrUnknownResult = errors.New("jira: unknown worklog result")
 )
 
@@ -36,7 +36,7 @@ const (
 	calendarPath    = "/secure/WorklogPROWorklogCalendar!default.jspa"
 )
 
-// Options — доступ к Jira; всё, кроме StartTime, приходит из зашифрованного хранилища
+// Options - доступ к Jira; всё, кроме StartTime, приходит из зашифрованного хранилища
 type Options struct {
 	BaseURL *url.URL
 	// Необязательный IP Jira: если корпоративный DNS недоступен через туннель, ходим по нему,
@@ -86,13 +86,13 @@ func New(cfg Options) *Client {
 		http: &http.Client{
 			Timeout:   30 * time.Second,
 			Transport: transport,
-			// Редирект от Jira — это почти всегда страница логина; Basic auth за ним не отправляем
+			// Редирект от Jira - это почти всегда страница логина; Basic auth за ним не отправляем
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }
 
-// CalendarURL — ссылка на календарь WorklogPRO для итогового сообщения
+// CalendarURL - ссылка на календарь WorklogPRO для итогового сообщения
 func (c *Client) CalendarURL() string {
 	return c.base.String() + calendarPath
 }
@@ -161,7 +161,7 @@ func (c *Client) HasWorklogOn(ctx context.Context, key string, date time.Time) (
 	return false, nil
 }
 
-// WorklogInput — что записать
+// WorklogInput - что записать
 type WorklogInput struct {
 	IssueKey string
 	Date     time.Time
@@ -169,7 +169,7 @@ type WorklogInput struct {
 	Comment  string
 }
 
-// Created — идентификаторы из ответа WorklogPRO
+// Created - идентификаторы из ответа WorklogPRO
 type Created struct {
 	WorklogID int64
 	PeriodID  int64
@@ -320,7 +320,7 @@ func firstID(header string) (int64, error) {
 	return strconv.ParseInt(m, 10, 64)
 }
 
-// FormatDuration — длительность в формате Jira: «8h», «7h 30m», «45m»
+// FormatDuration - длительность в формате Jira: «8h», «7h 30m», «45m»
 func FormatDuration(d time.Duration) string {
 	h := int(d / time.Hour)
 	m := int((d % time.Hour) / time.Minute)

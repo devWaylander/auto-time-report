@@ -1,8 +1,8 @@
 # API Jira и WorklogPRO
 
-Публичной документации на REST API WorklogPRO для Jira Server/Data Center нет: всё ниже снято с запросов браузера в DevTools и проверено на живой Jira. Домены и логины здесь — плейсхолдеры.
+Публичной документации на REST API WorklogPRO для Jira Server/Data Center нет: всё ниже снято с запросов браузера в DevTools и проверено на живой Jira. Домены и логины здесь - плейсхолдеры.
 
-Реализация — [internal/jira/jira.go](../internal/jira/jira.go).
+Реализация - [internal/jira/jira.go](../internal/jira/jira.go).
 
 ## Авторизация
 
@@ -15,13 +15,13 @@ X-Atlassian-Token: no-check
 
 `X-Atlassian-Token: no-check` отключает XSRF-проверку Jira для скриптов. Без него формы требуют `atl_token` из браузерной сессии.
 
-Признаки успеха и провала — в заголовках ответа:
+Признаки успеха и провала - в заголовках ответа:
 
 | Заголовок | Значение |
 |---|---|
-| `X-Seraph-LoginReason` | `OK` — вошли; `AUTHENTICATED_FAILED` — неверный пароль |
+| `X-Seraph-LoginReason` | `OK` - вошли; `AUTHENTICATED_FAILED` - неверный пароль |
 | `X-AUSERNAME` | под каким пользователем сервер нас узнал |
-| `X-Authentication-Denied-Reason` | например `CAPTCHA_CHALLENGE` — после нескольких неудачных входов |
+| `X-Authentication-Denied-Reason` | например `CAPTCHA_CHALLENGE` - после нескольких неудачных входов |
 
 **Важно:** после нескольких неудачных логинов Jira включает капчу и вход по Basic auth перестаёт работать, пока не пройдёшь её в браузере. Поэтому клиент никогда не повторяет запрос после ошибки авторизации, а бот блокирует отправку до `/unlock`.
 
@@ -41,11 +41,11 @@ GET /rest/api/2/myself
 GET /rest/api/2/issue/{key}?fields=summary
 ```
 
-`200` — задача есть, `404` — нет или нет доступа. Ключ перед подстановкой в URL проверяется регуляркой `^[A-Z][A-Z0-9_]*-[0-9]+$`.
+`200` - задача есть, `404` - нет или нет доступа. Ключ перед подстановкой в URL проверяется регуляркой `^[A-Z][A-Z0-9_]*-[0-9]+$`.
 
 ## Создание worklog'а
 
-Это не REST, а форма WorklogPRO — бот отправляет её так же, как браузер. Нативный `POST /rest/api/2/issue/{key}/worklog` не подходит: он не заполняет атрибуты WorklogPRO.
+Это не REST, а форма WorklogPRO - бот отправляет её так же, как браузер. Нативный `POST /rest/api/2/issue/{key}/worklog` не подходит: он не заполняет атрибуты WorklogPRO.
 
 ```
 POST /secure/WPCreateWorklogOnIssueWithWorkLogAction.jspa
@@ -71,11 +71,11 @@ X-Requested-With: XMLHttpRequest
 
 Атрибуты `wa_*` добавляются первыми, остальные поля их перекрывают: через `wa_*` нельзя подменить, например, `issueKey`.
 
-Ответ — HTML-страница диалога, её не разбираем и никуда не пишем. Всё нужное — в заголовках:
+Ответ - HTML-страница диалога, её не разбираем и никуда не пишем. Всё нужное - в заголовках:
 
 | Заголовок | Значение |
 |---|---|
-| `X-Atlassian-Dialog-Control` | `DONE` — worklog создан; иначе форма вернулась с ошибкой |
+| `X-Atlassian-Dialog-Control` | `DONE` - worklog создан; иначе форма вернулась с ошибкой |
 | `X-Worklogpro_workloglist` | ID созданного worklog'а |
 | `X-Worklogpro_periodid` | ID периода таймшита (неделя), нужен для отправки на проверку |
 | `X-Worklogpro_issuelist` | ключ задачи |
@@ -96,7 +96,7 @@ GET /rest/api/2/issue/{key}/worklog
 PUT /rest/com.deniz.jira.worklog/latest/approval/period/{periodId}/request?explanation=
 ```
 
-Без тела, успех — любой `2xx`. `periodId` — из `X-Worklogpro_periodid` при создании worklog'а. Периоды недельные: если пост захватил две недели, бот отправляет оба периода.
+Без тела, успех - любой `2xx`. `periodId` - из `X-Worklogpro_periodid` при создании worklog'а. Периоды недельные: если пост захватил две недели, бот отправляет оба периода.
 
 ## Календарь
 

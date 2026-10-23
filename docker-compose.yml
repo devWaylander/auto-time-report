@@ -39,7 +39,7 @@ services:
   vpn:
     <<: *hardening
     build: ./docker/vpn
-    # Root без CAP_DAC_OVERRIDE работает с файлами через группу бота: так он читает конфиг, а бот — сокет
+    # Root без CAP_DAC_OVERRIDE работает с файлами через группу бота: так он читает конфиг, а бот - сокет
     user: "0:${GID:-1000}"
     cap_add: [NET_ADMIN]
     devices:
