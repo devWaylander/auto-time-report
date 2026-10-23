@@ -4,11 +4,13 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 
@@ -75,8 +77,61 @@ func run() error {
 
 	go notify.New(st, cal, b, cfg.Timezone, user.ID, cfg.DefaultIssue).Run(ctx)
 
+	// Если Telegram недоступен долго, выходим: Docker перезапустит бота, и он заново подключится к сети
+	// VPN-sidecar'а. После перезапуска sidecar'а старое сетевое пространство бота остаётся без сети
+	lost := make(chan error, 1)
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	defer stopWatch()
+	go func() {
+		if err := watchdog(watchCtx, b); err != nil {
+			lost <- err
+			stop()
+		}
+	}()
+
 	slog.Info("bot started")
 	b.Start(ctx)
-	slog.Info("shutting down")
-	return nil
+	slog.Info("shutting down, waiting for the current submission")
+	b.Wait()
+
+	select {
+	case err := <-lost:
+		return err
+	default:
+		return nil
+	}
+}
+
+const (
+	watchdogInterval = time.Minute
+	watchdogFailures = 5
+)
+
+// watchdog проверяет связь с Telegram и возвращает ошибку после watchdogFailures неудач подряд
+func watchdog(ctx context.Context, b *bot.Bot) error {
+	failures := 0
+	ticker := time.NewTicker(watchdogInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		err := b.Ping(pingCtx)
+		cancel()
+		switch {
+		case err == nil:
+			failures = 0
+		case ctx.Err() != nil:
+			return nil
+		default:
+			failures++
+			slog.Warn("telegram is unreachable", "failures", failures, "error", err)
+			if failures >= watchdogFailures {
+				return fmt.Errorf("telegram unreachable for %d minutes: %w", failures, err)
+			}
+		}
+	}
 }
