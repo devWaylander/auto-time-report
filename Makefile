@@ -61,10 +61,27 @@ migrate-new: data ## Создать миграцию: make migrate-new name=add_
 	@test -n "$(name)" || { echo "Укажи имя: make migrate-new name=add_something"; exit 1; }
 	$(DBMATE) new $(name)
 
+# --- Секреты ---
+
+.PHONY: secrets
+secrets: ## Создать каталог secrets с правами только для тебя
+	@mkdir -p secrets && chmod 700 secrets
+
+.PHONY: token
+token: secrets ## Записать токен бота в secrets/telegram_bot_token (ввод без эха)
+	@test ! -e secrets/telegram_bot_token || { echo "secrets/telegram_bot_token уже есть — удали его сам, если хочешь заменить"; exit 1; }
+	@bash -c 'read -rsp "Токен бота: " t && echo && umask 377 && printf "%s" "$$t" > secrets/telegram_bot_token'
+	@echo "Готово: secrets/telegram_bot_token (0400)"
+
+.PHONY: vault
+vault: secrets ## Создать хранилище доступов: make vault ovpn=~/client.ovpn (без ovpn — без VPN)
+	go run ./cmd/vault -out secrets/creds.age $(if $(ovpn),-ovpn $(ovpn))
+
 # --- Docker ---
 
 .PHONY: up
 up: data ## Собрать и поднять всё в Docker (миграции накатятся сами)
+	@test -f secrets/telegram_bot_token && test -f secrets/creds.age || { echo "Нет секретов: make token и make vault"; exit 1; }
 	$(COMPOSE) up -d --build
 
 .PHONY: down
@@ -72,8 +89,8 @@ down: ## Остановить контейнеры
 	$(COMPOSE) down
 
 .PHONY: logs
-logs: ## Смотреть логи бота
-	$(COMPOSE) logs -f bot
+logs: ## Смотреть логи бота и VPN-sidecar'а
+	$(COMPOSE) logs -f bot vpn
 
 .PHONY: ps
 ps: ## Статус контейнеров
