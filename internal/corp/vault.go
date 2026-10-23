@@ -45,7 +45,7 @@ type VPNCredentials struct {
 	Routes []string `json:"routes"`
 }
 
-// MarshalJSON нужен, чтобы secret.String записался в хранилище как есть, а не как «***»
+// MarshalJSON нужен, чтобы secret.String записался в хранилище как есть, а не как "***"
 func (c Credentials) MarshalJSON() ([]byte, error) {
 	type jira struct {
 		BaseURL     string `json:"base_url"`

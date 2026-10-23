@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Submission - успешно записанный в Jira worklog для пары «задача + дата»
+// Submission - успешно записанный в Jira worklog для пары "задача + дата"
 type Submission struct {
 	ID         int64
 	UserID     int64
@@ -21,7 +21,7 @@ type Submission struct {
 	CreatedAt  time.Time
 }
 
-// SaveSubmission сохраняет запись о worklog'е; повтор той же пары «задача + дата» - ошибка
+// SaveSubmission сохраняет запись о worklog'е; повтор той же пары "задача + дата" - ошибка
 func (s *Store) SaveSubmission(ctx context.Context, sub Submission) (Submission, error) {
 	var (
 		weekPostID sql.NullInt64

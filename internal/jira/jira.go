@@ -320,7 +320,7 @@ func firstID(header string) (int64, error) {
 	return strconv.ParseInt(m, 10, 64)
 }
 
-// FormatDuration - длительность в формате Jira: «8h», «7h 30m», «45m»
+// FormatDuration - длительность в формате Jira: "8h", "7h 30m", "45m"
 func FormatDuration(d time.Duration) string {
 	h := int(d / time.Hour)
 	m := int((d % time.Hour) / time.Minute)

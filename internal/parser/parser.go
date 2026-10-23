@@ -97,18 +97,18 @@ const maxDayDuration = 24 * time.Hour
 var (
 	issueLineRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]*-[0-9]+$`)
 	dateLineRe  = regexp.MustCompile(`^([0-9]{1,2})\.([0-9]{1,2})$`)
-	// Число и слово сразу за ним: «2 часа», «30мин», «1,5 ч»
+	// Число и слово сразу за ним: "2 часа", "30мин", "1,5 ч"
 	amountRe = regexp.MustCompile(`([0-9]+(?:[.,][0-9]+)?)\s*([\p{L}]+)`)
 )
 
 // Parse разбирает пост. defaultIssue используется, пока в посте не встретилась строка-задача.
-// now задаёт «сегодня» и часовой пояс дат: передавай время в часовом поясе бота.
+// now задаёт "сегодня" и часовой пояс дат: передавай время в часовом поясе бота.
 // Ошибки формата возвращаются все сразу, каждая как *LineError
 func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 	var (
 		errs     []error
 		worklogs = map[worklogKey]*Worklog{}
-		// Первая строка, где для пары «задача + дата» встретилась дата, для сообщения о повторе
+		// Первая строка, где для пары "задача + дата" встретилась дата, для сообщения о повторе
 		dateLines = map[worklogKey]int{}
 		issue     = defaultIssue
 		// Нулевая дата - даты ещё нет или задача только что сменилась
@@ -278,8 +278,8 @@ func resolveDate(m []string, today time.Time) (time.Time, error) {
 	return best, nil
 }
 
-// parseDuration ищет в строке «N час…/ч» и «N мин…». Числа сразу после ASCII-символов и дефиса
-// пропускаются, чтобы «ABC-123 чинил» не стало 123 часами
+// parseDuration ищет в строке "N час…/ч" и "N мин…". Числа сразу после ASCII-символов и дефиса
+// пропускаются, чтобы "ABC-123 чинил" не стало 123 часами
 func parseDuration(line string) (time.Duration, error) {
 	var hours, minutes []float64
 	for _, m := range amountRe.FindAllStringSubmatchIndex(line, -1) {
@@ -305,7 +305,7 @@ func parseDuration(line string) (time.Duration, error) {
 
 	switch {
 	case len(hours) == 0 && len(minutes) == 0:
-		return 0, errors.New("не нашёл длительность: нужно, например, «2 часа» или «30 минут»")
+		return 0, errors.New(`не нашёл длительность: нужно, например, "2 часа" или "30 минут"`)
 	case len(hours) > 1:
 		return 0, errors.New("часы указаны несколько раз")
 	case len(minutes) > 1:
@@ -326,7 +326,7 @@ func parseDuration(line string) (time.Duration, error) {
 	return d, nil
 }
 
-// FormatDuration печатает длительность по-человечески: «7ч 30м», «8ч», «45м»
+// FormatDuration печатает длительность по-человечески: "7ч 30м", "8ч", "45м"
 func FormatDuration(d time.Duration) string {
 	h := int(d / time.Hour)
 	m := int((d % time.Hour) / time.Minute)

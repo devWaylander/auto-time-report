@@ -204,8 +204,8 @@ func (b *Bot) cmdVacation(ctx context.Context, args string) {
 	b.notify(ctx, fmt.Sprintf("🏖 Отпуск %s-%s: напоминаний не будет.", start.Format("02.01.2006"), end.Format("02.01.2006")))
 }
 
-// parseVacation разбирает «ДД.ММ-ДД.ММ». Год - ближайший, при котором отпуск ещё не закончился:
-// в декабре «05.01-10.01» значит январь следующего года
+// parseVacation разбирает "ДД.ММ-ДД.ММ". Год - ближайший, при котором отпуск ещё не закончился:
+// в декабре "05.01-10.01" значит январь следующего года
 func parseVacation(s string, today time.Time) (time.Time, time.Time, error) {
 	from, to, ok := strings.Cut(strings.ReplaceAll(s, " ", ""), "-")
 	if !ok {
