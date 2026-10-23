@@ -248,3 +248,51 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestNetworkErrorHidesAddresses(t *testing.T) {
+	ctx := context.Background()
+
+	base, _ := url.Parse("https://jira.secret-corp.test:1")
+	c := New(Options{BaseURL: base, IP: "127.0.0.1", Username: "john.doe", Password: "x"})
+	err := c.CheckAuth(ctx)
+	if err == nil {
+		t.Fatal("expected connection error")
+	}
+	for _, leak := range []string{"secret-corp", "127.0.0.1"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("error leaks %q: %v", leak, err)
+		}
+	}
+
+	base, _ = url.Parse("https://jira.secret-corp.invalid")
+	c = New(Options{BaseURL: base, Username: "john.doe", Password: "x"})
+	err = c.CheckAuth(ctx)
+	if err == nil || strings.Contains(err.Error(), "secret-corp") || !strings.Contains(err.Error(), "dns") {
+		t.Errorf("dns error = %v", err)
+	}
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := c.CheckAuth(canceled); !errors.Is(err, context.Canceled) {
+		t.Errorf("canceled error = %v, want context.Canceled", err)
+	}
+}
+
+func TestContextPathAndTrailingSlash(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/jira/rest/api/2/myself" {
+			t.Errorf("path = %s, want /jira/rest/api/2/myself", r.URL.Path)
+		}
+		w.Header().Set("X-AUSERNAME", "john.doe")
+	}))
+	defer srv.Close()
+
+	base, _ := url.Parse(srv.URL + "/jira/")
+	c := New(Options{BaseURL: base, Username: "john.doe", Password: "x"})
+	if err := c.CheckAuth(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.CalendarURL(); got != srv.URL+"/jira"+calendarPath {
+		t.Fatalf("calendar url = %s", got)
+	}
+}

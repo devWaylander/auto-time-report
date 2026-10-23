@@ -208,3 +208,64 @@ func TestTunnelTimeoutWithoutSidecar(t *testing.T) {
 		t.Fatalf("error = %v, want deadline exceeded", err)
 	}
 }
+
+func TestStopOrphan(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, tunnelSocketName)
+
+	// Сокет без слушателя - мусор, просто удаляется
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ul, ok := ln.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
+	_ = ln.Close()
+	if err := stopOrphan(context.Background(), sock); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sock); !os.IsNotExist(err) {
+		t.Fatal("stale socket was not removed")
+	}
+
+	// Живой openvpn получает SIGTERM, sidecar после его выхода убирает сокет
+	ln, err = net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		line, _ := bufio.NewReader(conn).ReadString('\n')
+		got <- line
+		_ = conn.Close()
+		_ = ln.Close()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := stopOrphan(ctx, sock); err != nil {
+		t.Fatal(err)
+	}
+	if line := <-got; line != "signal SIGTERM\n" {
+		t.Fatalf("orphan got %q", line)
+	}
+}
+
+func TestRoutesAndBaseURL(t *testing.T) {
+	if _, err := parseRoutes([]string{"fd00::1/128"}); err == nil {
+		t.Error("IPv6 route accepted")
+	}
+	c := testCreds()
+	c.Jira.BaseURL = "https://example.com/jira"
+	if err := c.Validate(); err != nil {
+		t.Errorf("context path rejected: %v", err)
+	}
+	c.Jira.CACert = "not a pem"
+	if err := c.Validate(); err == nil {
+		t.Error("broken CA accepted")
+	}
+}

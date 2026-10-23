@@ -4,6 +4,8 @@ package jira
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,10 +48,15 @@ type Options struct {
 	Password    secret.String
 	StartTime   string // ЧЧ:ММ
 	ExtraFields url.Values
+	// Корпоративный CA, если сертификат Jira выпущен не публичным центром; nil - системные корни
+	RootCAs *x509.CertPool
 }
 
 type Client struct {
-	base      *url.URL
+	// Адрес без слэша в конце; может содержать context path, например https://example.com/jira
+	base string
+	// Хост и IP Jira вырезаются из текстов ошибок: они уходят в Telegram и логи
+	hidden    []string
 	username  string
 	password  secret.String
 	startTime string
@@ -61,6 +68,9 @@ func New(cfg Options) *Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// Никаких прокси из окружения: пароль должен идти только напрямую через туннель
 	transport.Proxy = nil
+	if cfg.RootCAs != nil {
+		transport.TLSClientConfig = &tls.Config{RootCAs: cfg.RootCAs, MinVersion: tls.VersionTLS12}
+	}
 	if cfg.IP != "" {
 		port := cfg.BaseURL.Port()
 		if port == "" {
@@ -77,8 +87,17 @@ func New(cfg Options) *Client {
 		}
 	}
 
+	hidden := []string{cfg.BaseURL.Host, cfg.BaseURL.Hostname()}
+	if cfg.IP != "" {
+		hidden = append(hidden, cfg.IP)
+	}
+	base := *cfg.BaseURL
+	base.Path = strings.TrimRight(base.Path, "/")
+	base.RawQuery, base.Fragment = "", ""
+
 	return &Client{
-		base:      cfg.BaseURL,
+		base:      base.String(),
+		hidden:    hidden,
 		username:  cfg.Username,
 		password:  cfg.Password,
 		startTime: cfg.StartTime,
@@ -94,7 +113,7 @@ func New(cfg Options) *Client {
 
 // CalendarURL - ссылка на календарь WorklogPRO для итогового сообщения
 func (c *Client) CalendarURL() string {
-	return c.base.String() + calendarPath
+	return c.base + calendarPath
 }
 
 // CheckAuth проверяет логин и пароль одним запросом
@@ -252,7 +271,7 @@ func (c *Client) RequestApproval(ctx context.Context, periodID int64) error {
 // do выполняет запрос с Basic auth. Тело ответа декодируется в out (если задан) и всегда закрывается;
 // в ошибки и логи оно не попадает
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, out any, headers ...http.Header) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.base.String()+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("jira: build request: %w", err)
 	}
@@ -269,7 +288,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, ou
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("jira: %s %s: %w", method, req.URL.Path, err)
+		return nil, c.networkError(method, req.URL.Path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -284,6 +303,49 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, ou
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
 	return resp, nil
+}
+
+// networkError описывает сетевую ошибку без адресов: *url.Error, *net.OpError и *net.DNSError
+// содержат домен и IP Jira, а текст ошибки уходит в Telegram и логи. Ошибки контекста сохраняются для errors.Is
+func (c *Client) networkError(method, path string, err error) error {
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("jira: %s %s: %w", method, path, ctxErr(err))
+	}
+
+	var (
+		dnsErr *net.DNSError
+		opErr  *net.OpError
+		reason string
+	)
+	switch {
+	case errors.As(err, &dnsErr):
+		reason = "dns lookup failed"
+	case errors.As(err, &opErr) && opErr.Timeout():
+		reason = "timeout"
+	case errors.As(err, &opErr):
+		reason = opErr.Op + ": " + opErr.Err.Error()
+	default:
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		reason = err.Error()
+	}
+	// Страховка: TLS и прочие ошибки тоже могут назвать хост
+	for _, h := range c.hidden {
+		if h != "" {
+			reason = strings.ReplaceAll(reason, h, "jira")
+		}
+	}
+	return fmt.Errorf("jira: %s %s: %s", method, path, reason)
+}
+
+func ctxErr(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return context.Canceled
 }
 
 func authError(resp *http.Response) error {

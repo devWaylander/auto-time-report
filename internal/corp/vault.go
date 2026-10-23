@@ -2,6 +2,7 @@ package corp
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +36,20 @@ type JiraCredentials struct {
 	Username    string        `json:"username"`
 	Password    secret.String `json:"password"`
 	ExtraFields string        `json:"extra_fields,omitempty"`
+	// PEM корпоративного CA, если сертификат Jira выпущен не публичным центром
+	CACert string `json:"ca_cert,omitempty"`
+}
+
+// RootCAs - пул с корпоративным CA или nil, если он не задан
+func (j JiraCredentials) RootCAs() (*x509.CertPool, error) {
+	if strings.TrimSpace(j.CACert) == "" {
+		return nil, nil
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(j.CACert)) {
+		return nil, errors.New("jira ca_cert is not a valid PEM certificate")
+	}
+	return pool, nil
 }
 
 type VPNCredentials struct {
@@ -53,6 +68,7 @@ func (c Credentials) MarshalJSON() ([]byte, error) {
 		Username    string `json:"username"`
 		Password    string `json:"password"`
 		ExtraFields string `json:"extra_fields,omitempty"`
+		CACert      string `json:"ca_cert,omitempty"`
 	}
 	type vpn struct {
 		Username string   `json:"username"`
@@ -66,7 +82,7 @@ func (c Credentials) MarshalJSON() ([]byte, error) {
 	}{
 		Jira: jira{
 			BaseURL: c.Jira.BaseURL, IP: c.Jira.IP, Username: c.Jira.Username,
-			Password: c.Jira.Password.Reveal(), ExtraFields: c.Jira.ExtraFields,
+			Password: c.Jira.Password.Reveal(), ExtraFields: c.Jira.ExtraFields, CACert: c.Jira.CACert,
 		},
 	}
 	if c.VPN != nil {
@@ -82,14 +98,17 @@ func (c Credentials) MarshalJSON() ([]byte, error) {
 func (c Credentials) Validate() error {
 	var errs []error
 	u, err := url.Parse(c.Jira.BaseURL)
-	if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") {
-		errs = append(errs, fmt.Errorf("jira base_url must look like https://jira.example.com, got %q", c.Jira.BaseURL))
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+		errs = append(errs, fmt.Errorf("jira base_url must look like https://jira.example.com or https://example.com/jira, got %q", c.Jira.BaseURL))
 	}
 	if c.Jira.IP != "" && net.ParseIP(c.Jira.IP) == nil {
 		errs = append(errs, fmt.Errorf("jira ip %q is not an IP address", c.Jira.IP))
 	}
 	if c.Jira.Username == "" || c.Jira.Password == "" {
 		errs = append(errs, errors.New("jira username and password are required"))
+	}
+	if _, err := c.Jira.RootCAs(); err != nil {
+		errs = append(errs, err)
 	}
 	if _, err := url.ParseQuery(c.Jira.ExtraFields); err != nil {
 		errs = append(errs, fmt.Errorf("jira extra_fields: %w", err))
@@ -185,6 +204,9 @@ func parseRoutes(routes []string) ([]*net.IPNet, error) {
 		_, n, err := net.ParseCIDR(strings.TrimSpace(r))
 		if err != nil {
 			return nil, fmt.Errorf("vpn route %q: %w", r, err)
+		}
+		if n.IP.To4() == nil {
+			return nil, fmt.Errorf("vpn route %s: only IPv4 routes are supported", n)
 		}
 		if ones, _ := n.Mask.Size(); ones == 0 {
 			return nil, fmt.Errorf("vpn route %s would send all traffic through the VPN", n)
