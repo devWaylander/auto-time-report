@@ -38,6 +38,8 @@ type Config struct {
 	ChannelID    int64
 	DefaultIssue string
 	Location     *time.Location
+	// Адрес Bot API; пусто - api.telegram.org. Нужен тестам и для своего Bot API сервера
+	ServerURL string
 }
 
 const (
@@ -47,12 +49,19 @@ const (
 )
 
 type Bot struct {
+	// clock подменяется в тестах
+	clock  func() time.Time
 	api    *tgbot.Bot
 	cfg    Config
 	store  *store.Store
 	cal    Calendar
 	runner Runner
 	userID int64
+
+	// Апдейты канала обрабатываются по одному
+	postMu sync.Mutex
+	// Идущая отправка: при остановке её нужно дождаться, чтобы туннель погас
+	inflight sync.WaitGroup
 
 	mu       sync.Mutex
 	pending  *pendingSubmit
@@ -64,14 +73,18 @@ type Bot struct {
 }
 
 func New(cfg Config, st *store.Store, cal Calendar, runner Runner, userID int64) (*Bot, error) {
-	b := &Bot{cfg: cfg, store: st, cal: cal, runner: runner, userID: userID}
-	api, err := tgbot.New(cfg.Token.Reveal(),
+	b := &Bot{clock: time.Now, cfg: cfg, store: st, cal: cal, runner: runner, userID: userID}
+	opts := []tgbot.Option{
 		tgbot.WithDefaultHandler(b.handle),
 		tgbot.WithErrorsHandler(b.onError),
 		tgbot.WithAllowedUpdates(tgbot.AllowedUpdates{
 			"message", "channel_post", "edited_channel_post", "callback_query",
 		}),
-	)
+	}
+	if cfg.ServerURL != "" {
+		opts = append(opts, tgbot.WithServerURL(cfg.ServerURL))
+	}
+	api, err := tgbot.New(cfg.Token.Reveal(), opts...)
 	if err != nil {
 		return nil, errors.New(b.redact(fmt.Sprintf("telegram: %v", err)))
 	}
@@ -82,6 +95,19 @@ func New(cfg Config, st *store.Store, cal Calendar, runner Runner, userID int64)
 // Start слушает Telegram, пока не отменят контекст
 func (b *Bot) Start(ctx context.Context) {
 	b.api.Start(ctx)
+}
+
+// Wait ждёт окончания идущей отправки: при остановке она гасит туннель
+func (b *Bot) Wait() {
+	b.inflight.Wait()
+}
+
+// Ping проверяет связь с Telegram
+func (b *Bot) Ping(ctx context.Context) error {
+	if _, err := b.api.GetMe(ctx); err != nil {
+		return errors.New(b.redact(err.Error()))
+	}
+	return nil
 }
 
 func (b *Bot) handle(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
@@ -105,10 +131,14 @@ func (b *Bot) fromOwner(msg *models.Message) bool {
 
 func (b *Bot) onError(err error) {
 	msg := b.redact(err.Error())
+	if strings.Contains(msg, "decode update") {
+		// Библиотека кладёт в эту ошибку сырой апдейт, а в нём может быть пароль-фраза
+		msg = "failed to decode update"
+	}
 	slog.Error("telegram", "error", msg)
 
 	// 409 Conflict: getUpdates вызывает ещё кто-то с тем же токеном
-	if !strings.Contains(msg, "409") && !strings.Contains(strings.ToLower(msg), "conflict") {
+	if !errors.Is(err, tgbot.ErrorConflict) && !strings.Contains(strings.ToLower(msg), "conflict") {
 		return
 	}
 	b.mu.Lock()
@@ -134,7 +164,7 @@ func (b *Bot) redact(s string) string {
 }
 
 func (b *Bot) now() time.Time {
-	return time.Now().In(b.cfg.Location)
+	return b.clock().In(b.cfg.Location)
 }
 
 func (b *Bot) today() time.Time {
@@ -204,10 +234,17 @@ func (b *Bot) answer(ctx context.Context, cq *models.CallbackQuery, text string,
 	}
 }
 
+// onChannelPost следит за постом недели. Правки уже известного поста принимаются всегда. Новое сообщение
+// становится постом недели, только если разбирается без ошибок и относится к более поздней неделе, чем текущий
+// пост: так заметки в канале его не перехватят. Остальные сообщения молча игнорируются и в базу не попадают
 func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited bool) {
 	if msg.Chat.ID != b.cfg.ChannelID || !parser.LooksLikePost(msg.Text) {
 		return
 	}
+	// Хендлеры работают параллельно: апдейты канала разбираем по одному, чтобы решения не перемешались
+	b.postMu.Lock()
+	defer b.postMu.Unlock()
+
 	post := store.WeekPost{
 		UserID:    b.userID,
 		ChatID:    msg.Chat.ID,
@@ -218,30 +255,81 @@ func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited boo
 	if edited && msg.EditDate != 0 {
 		post.EditedAt = time.Unix(int64(msg.EditDate), 0)
 	}
-	if _, err := b.store.SaveWeekPost(ctx, post); err != nil {
+
+	_, err := b.store.WeekPostByMessage(ctx, post.ChatID, post.MessageID)
+	switch {
+	case err == nil:
+		b.updateKnownPost(ctx, post)
+	case errors.Is(err, store.ErrNotFound):
+		b.considerNewPost(ctx, post)
+	default:
+		slog.Error("find week post", "error", err)
+	}
+}
+
+func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) {
+	saved, updated, err := b.store.SaveWeekPost(ctx, post)
+	if err != nil {
 		slog.Error("save week post", "error", err)
-		b.notify(ctx, "⚠️ Не смог сохранить пост недели, загляни в логи бота.")
+		b.notify(ctx, "⚠️ Не смог сохранить правку поста недели, загляни в логи бота.")
+		return
+	}
+	if !updated {
+		// Пришла версия старше сохранённой
 		return
 	}
 
-	report, err := parser.Parse(msg.Text, b.cfg.DefaultIssue, b.now())
+	report, err := parser.Parse(saved.Text, b.cfg.DefaultIssue, b.now())
 	if err != nil {
 		b.notify(ctx, "⚠️ В посте недели ошибки:\n"+formatParseErrors(err))
 		return
 	}
-	if edited {
-		if warning, err := b.changedSubmitted(ctx, report); err != nil {
-			slog.Error("compare with submitted", "error", err)
-		} else if warning != "" {
-			b.notify(ctx, warning)
+	if warning, err := b.changedSubmitted(ctx, report); err != nil {
+		slog.Error("compare with submitted", "error", err)
+	} else if warning != "" {
+		b.notify(ctx, warning)
+	}
+}
+
+func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) {
+	report, err := parser.Parse(post.Text, b.cfg.DefaultIssue, b.now())
+	if err != nil {
+		return
+	}
+	current, err := b.store.LatestWeekPost(ctx, b.userID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		slog.Error("load week post", "error", err)
+		return
+	default:
+		if !weekStart(report.Dates()[0]).After(b.lastWeekOf(current)) {
+			return
 		}
 	}
+	if _, _, err := b.store.SaveWeekPost(ctx, post); err != nil {
+		slog.Error("save week post", "error", err)
+		b.notify(ctx, "⚠️ Не смог сохранить пост недели, загляни в логи бота.")
+	}
+}
+
+// lastWeekOf - понедельник последней недели в посте; если пост не разбирается, неделя его публикации
+func (b *Bot) lastWeekOf(post store.WeekPost) time.Time {
+	report, err := parser.Parse(post.Text, b.cfg.DefaultIssue, b.now())
+	if err != nil {
+		p := post.PostedAt.In(b.cfg.Location)
+		return weekStart(time.Date(p.Year(), p.Month(), p.Day(), 0, 0, 0, 0, b.cfg.Location))
+	}
+	dates := report.Dates()
+	return weekStart(dates[len(dates)-1])
 }
 
 // changedSubmitted предупреждает о правках в днях, которые уже записаны в Jira: бот их не перезаписывает
 func (b *Bot) changedSubmitted(ctx context.Context, report parser.Report) (string, error) {
+	// Берём целые недели: удалённый крайний день тоже должен попасть в проверку
 	dates := report.Dates()
-	subs, err := b.store.SubmissionsBetween(ctx, b.userID, dates[0], dates[len(dates)-1])
+	from, to := weekStart(dates[0]), weekStart(dates[len(dates)-1]).AddDate(0, 0, 6)
+	subs, err := b.store.SubmissionsBetween(ctx, b.userID, from, to)
 	if err != nil {
 		return "", err
 	}
@@ -312,7 +400,11 @@ func (b *Bot) onMessage(ctx context.Context, msg *models.Message) {
 	case "/unlock":
 		b.cmdUnlock(ctx)
 	default:
-		b.notify(ctx, "Не знаю такой команды. /help - список команд")
+		// Неизвестная "команда" может оказаться пароль-фразой, которая начинается со слэша
+		if err := b.deleteMessage(ctx, msg.Chat.ID, msg.ID); err != nil {
+			slog.Error("delete unknown command", "error", err)
+		}
+		b.notify(ctx, "🧹 Не знаю такой команды и на всякий случай удалил сообщение. /help - список команд")
 	}
 }
 
@@ -358,9 +450,17 @@ const helpText = `<b>Что я умею</b>
 
 Пароль-фразу отправляй <b>только</b> в ответ на мой запрос, который пришёл сразу после твоего нажатия кнопки.`
 
+// Сколько ошибок разбора показывать: сообщение Telegram ограничено 4096 символами
+const maxShownErrors = 25
+
 func formatParseErrors(err error) string {
+	all := strings.Split(err.Error(), "\n")
 	var lines []string
-	for _, line := range strings.Split(err.Error(), "\n") {
+	for i, line := range all {
+		if i == maxShownErrors {
+			lines = append(lines, fmt.Sprintf("… и ещё %d", len(all)-maxShownErrors))
+			break
+		}
 		lines = append(lines, "• "+html.EscapeString(line))
 	}
 	return strings.Join(lines, "\n")

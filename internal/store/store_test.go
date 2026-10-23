@@ -207,41 +207,51 @@ func TestWeekPostUpsert(t *testing.T) {
 	if _, err := s.LatestWeekPost(ctx, u.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("LatestWeekPost(no posts) error = %v, want ErrNotFound", err)
 	}
+	if _, err := s.WeekPostByMessage(ctx, -100, 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("WeekPostByMessage(unknown) error = %v, want ErrNotFound", err)
+	}
 
 	posted := time.Date(2026, 10, 19, 9, 0, 0, 0, time.UTC)
-	first, err := s.SaveWeekPost(ctx, WeekPost{
-		UserID: u.ID, ChatID: -100, MessageID: 1, Text: "19.10\nA - 8 часов", PostedAt: posted,
-	})
-	if err != nil {
-		t.Fatal(err)
+	post := func(text string, edited time.Time) WeekPost {
+		return WeekPost{UserID: u.ID, ChatID: -100, MessageID: 1, Text: text, PostedAt: posted, EditedAt: edited}
+	}
+	save := func(p WeekPost) (WeekPost, bool) {
+		t.Helper()
+		saved, updated, err := s.SaveWeekPost(ctx, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return saved, updated
 	}
 
-	edited := posted.Add(24 * time.Hour)
-	second, err := s.SaveWeekPost(ctx, WeekPost{
-		UserID: u.ID, ChatID: -100, MessageID: 1, Text: "19.10\nA - 8 часов\n\n20.10\nB - 8 часов",
-		PostedAt: posted, EditedAt: edited,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.ID != first.ID {
-		t.Fatalf("edit created a new post: %d != %d", second.ID, first.ID)
+	first, updated := save(post("v1", time.Time{}))
+	if !updated {
+		t.Fatal("new post not saved")
 	}
 
-	got, err := s.LatestWeekPost(ctx, u.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Text != second.Text || !got.EditedAt.Equal(edited) || !got.PostedAt.Equal(posted) {
-		t.Fatalf("LatestWeekPost = %+v", got)
+	edit2 := posted.Add(2 * time.Hour)
+	second, updated := save(post("v2", edit2))
+	if !updated || second.ID != first.ID {
+		t.Fatalf("edit: updated=%v id=%d, want true %d", updated, second.ID, first.ID)
 	}
 
-	next, err := s.SaveWeekPost(ctx, WeekPost{
-		UserID: u.ID, ChatID: -100, MessageID: 2, Text: "26.10\nC - 8 часов", PostedAt: posted.Add(7 * 24 * time.Hour),
-	})
+	// Старая правка и исходный пост пришли после свежей правки - текст не откатывается
+	for _, stale := range []WeekPost{post("v1.5", posted.Add(time.Hour)), post("v1", time.Time{})} {
+		current, updated := save(stale)
+		if updated || current.Text != "v2" || !current.EditedAt.Equal(edit2) {
+			t.Fatalf("stale %q: updated=%v current=%+v", stale.Text, updated, current)
+		}
+	}
+
+	got, err := s.WeekPostByMessage(ctx, -100, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got.Text != "v2" || !got.PostedAt.Equal(posted) || got.UserID != u.ID {
+		t.Fatalf("WeekPostByMessage = %+v", got)
+	}
+
+	next, _ := save(WeekPost{UserID: u.ID, ChatID: -100, MessageID: 2, Text: "26.10", PostedAt: posted.Add(7 * 24 * time.Hour)})
 	if got, _ := s.LatestWeekPost(ctx, u.ID); got.ID != next.ID {
 		t.Fatalf("LatestWeekPost returned post %d, want %d", got.ID, next.ID)
 	}
@@ -336,6 +346,13 @@ func TestClaimNotification(t *testing.T) {
 	}
 	if _, err := s.ClaimNotification(ctx, u.ID, "monthly", d); err == nil {
 		t.Fatal("expected CHECK constraint error for unknown kind")
+	}
+
+	if err := s.ReleaseNotification(ctx, u.ID, NotificationDaily, d); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.ClaimNotification(ctx, u.ID, NotificationDaily, d); err != nil || !ok {
+		t.Fatalf("claim after release = %v, %v; want true", ok, err)
 	}
 }
 

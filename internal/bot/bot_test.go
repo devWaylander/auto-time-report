@@ -20,6 +20,11 @@ import (
 
 var tz = time.FixedZone("UTC+7", 7*60*60)
 
+// fixedClock - "сейчас" для тестов: пятница 23.10.2026, полдень
+func fixedClock() time.Time {
+	return time.Date(2026, 10, 23, 12, 0, 0, 0, tz)
+}
+
 func day(m time.Month, d int) time.Time {
 	return time.Date(2026, m, d, 0, 0, 0, 0, tz)
 }
@@ -49,6 +54,7 @@ func newTestBot(t *testing.T, cal fakeCalendar) (*Bot, *store.Store) {
 		t.Fatal(err)
 	}
 	return &Bot{
+		clock:  fixedClock,
 		cfg:    Config{Token: "123:secret-token", OwnerID: 42, ChannelID: -100, DefaultIssue: "ABC-1", Location: tz},
 		store:  st,
 		cal:    cal,
@@ -94,7 +100,7 @@ func TestPreviewInputAndRender(t *testing.T) {
 
 	// Понедельник и вторник, во вторник две задачи; понедельник уже записан
 	post := "19.10\nРабота - 8 часов\n\n20.10\nДело <b>важное</b> - 6 часов\n\nABC-2\n20.10\nСозвон - 2 часа"
-	saved, err := st.SaveWeekPost(ctx, store.WeekPost{UserID: b.userID, ChatID: -100, MessageID: 1, Text: post, PostedAt: day(10, 19)})
+	saved, _, err := st.SaveWeekPost(ctx, store.WeekPost{UserID: b.userID, ChatID: -100, MessageID: 1, Text: post, PostedAt: day(10, 19)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,12 +284,12 @@ func TestRefusal(t *testing.T) {
 		t.Fatalf("unexpected refusal: %s", r)
 	}
 	for range maxAttemptsPerHour {
-		b.attempts = append(b.attempts, time.Now())
+		b.attempts = append(b.attempts, b.clock())
 	}
 	if b.refusalLocked() == "" {
 		t.Fatal("no refusal after too many attempts")
 	}
-	b.attempts = []time.Time{time.Now().Add(-2 * time.Hour)}
+	b.attempts = []time.Time{b.clock().Add(-2 * time.Hour)}
 	if r := b.refusalLocked(); r != "" || len(b.attempts) != 0 {
 		t.Fatalf("old attempts not pruned: %q %v", r, b.attempts)
 	}
