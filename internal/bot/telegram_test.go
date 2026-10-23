@@ -83,7 +83,7 @@ func countMethod(calls []apiCall, method string) int {
 	return n
 }
 
-// fakeRunner вместо корпоративной части: запоминает фразу и задание, «записывает» всё
+// fakeRunner вместо корпоративной части: запоминает фразу и задание, "записывает" всё
 type fakeRunner struct {
 	passphrase string
 	jobs       []corp.Job
