@@ -17,6 +17,9 @@ DBMATE  := $(COMPOSE) run --rm --no-deps migrate
 # Образы, которые собирает compose (имя проекта задано в docker-compose.yml), и чем ходить на сервер в make ship
 IMAGES  := auto-time-report-bot auto-time-report-vpn
 SSH     ?= ssh
+# Старые версии наших образов: после сборки или docker load тег уходит на новый образ, а старый остаётся
+# безымянным и копится. Чистим только образы этого проекта и только неиспользуемые
+PRUNE   := docker image prune -f --filter label=com.docker.compose.project=auto-time-report
 
 .PHONY: help
 help: ## Показать список команд
@@ -92,11 +95,13 @@ vault: secrets ## Создать хранилище доступов: make vault
 up: preflight ## Поднять из готовых образов без сборки: на сервере после make ship (миграции накатятся сами)
 	$(COMPOSE) down
 	$(COMPOSE) up -d --no-build
+	@$(PRUNE) >/dev/null
 
 .PHONY: up-build
 up-build: preflight ## Собрать образы и поднять всё в Docker: там, где сборка не мучает машину
 	$(COMPOSE) down
 	$(COMPOSE) up -d --build
+	@$(PRUNE) >/dev/null
 
 .PHONY: ship
 ship: ## Собрать образы у себя и залить на сервер: make ship host=user@server (порт - через SSH="ssh -p 2222")
@@ -104,6 +109,7 @@ ship: ## Собрать образы у себя и залить на серве
 	@remote=$$($(SSH) $(host) uname -m) || { echo "Не удалось зайти на $(host) по SSH"; exit 1; }; \
 		test "$$remote" = "$$(uname -m)" || { echo "Архитектура сервера ($$remote) не совпадает с локальной ($$(uname -m))"; exit 1; }
 	$(COMPOSE) build
+	@$(PRUNE) >/dev/null
 	docker save $(IMAGES) | gzip | $(SSH) $(host) 'gunzip | docker load'
 	@echo "Готово: на сервере make up"
 
