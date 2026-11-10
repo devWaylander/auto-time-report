@@ -113,7 +113,7 @@ make vault ovpn=~/client.ovpn   # спросит URL Jira, логины, пар�
 cp .env.example .env              # заполни: ID в Telegram, задача по умолчанию, часовой пояс
 make token                        # токен бота в secrets/telegram_bot_token, ввод без эха
 scp secrets/creds.age server:...  # хранилище копируешь готовым, .ovpn на сервер не нужен
-make up                           # соберёт образы, накатит миграции, запустит VPN-sidecar и бота
+make up-build                     # соберёт образы, накатит миграции, запустит VPN-sidecar и бота
 make logs
 ```
 
@@ -121,10 +121,10 @@ make logs
 
 ```bash
 make ship host=user@server        # у себя: соберёт образы и загрузит их на сервер через docker load
-make start                        # на сервере вместо make up: поднимет всё без сборки
+make up                           # на сервере: поднимет всё из залитых образов, без сборки
 ```
 
-После обновления кода: `git pull` на сервере (миграции берутся из репозитория), `make ship` у себя, `make start` на сервере.
+После обновления кода: `git pull` на сервере (миграции берутся из репозитория), `make ship` у себя, `make up` на сервере.
 
 Если `api.telegram.org` с сервера недоступен (в логах `getMe ... context deadline exceeded`), пусти Telegram через прокси, у которого есть выход к нему, например через Xray на этом же сервере:
 
@@ -134,7 +134,7 @@ make start                        # на сервере вместо make up: п
    ```bash
    ufw allow from 172.16.0.0/12 to any port 10808 proto tcp
    ```
-4. В `.env`: `TELEGRAM_PROXY_URL=socks5h://host.docker.internal:10808` (с паролем - `socks5h://user:password@host.docker.internal:10808`), затем `make start` (или `make up`).
+4. В `.env`: `TELEGRAM_PROXY_URL=socks5h://host.docker.internal:10808` (с паролем - `socks5h://user:password@host.docker.internal:10808`), затем `make up` (или `make up-build`).
 
 Через прокси идут только запросы к Bot API, внутри них TLS: прокси не видит ни токен, ни пароль-фразу. Jira и VPN через него не ходят.
 
@@ -166,8 +166,8 @@ make start                        # на сервере вместо make up: п
 | Команда | Что делает |
 |---|---|
 | `make secrets`, `make token`, `make vault ovpn=...` | каталог секретов, токен бота, хранилище доступов |
-| `make up` / `make down` | поднять / остановить всё в Docker |
-| `make ship host=...`, `make start` | собрать образы у себя и залить на сервер / поднять на сервере без сборки |
+| `make up-build` / `make down` | собрать и поднять / остановить всё в Docker |
+| `make ship host=...`, `make up` | собрать образы у себя и залить на сервер / поднять на сервере без сборки |
 | `make logs`, `make ps` | логи бота и VPN-sidecar'а, статус контейнеров |
 | `make run` | запустить бота локально, без Docker (переменные из `.env`) |
 | `make test` | тесты |
@@ -203,7 +203,7 @@ docker/vpn       - VPN-sidecar: OpenVPN по запросу бота
 
 SQLite в `./data/bot.db`. Это один и тот же файл и для `make run`, и для Docker: каталог `./data` монтируется в контейнер. Контейнеры работают под твоим UID/GID, поэтому файлы в `./data` и `db/migrations` принадлежат тебе, а не root.
 
-Схемой владеют миграции [dbmate](https://github.com/amacneil/dbmate) в [db/migrations](db/migrations). При `make up` сначала одноразовый сервис `migrate` накатывает миграции, и только после его успешного завершения стартует бот. Сам бот таблицы не создаёт: если миграции не накатаны, он сразу падает с подсказкой.
+Схемой владеют миграции [dbmate](https://github.com/amacneil/dbmate) в [db/migrations](db/migrations). При `make up` и `make up-build` сначала одноразовый сервис `migrate` накатывает миграции, и только после его успешного завершения стартует бот. Сам бот таблицы не создаёт: если миграции не накатаны, он сразу падает с подсказкой.
 
 | Таблица | Что хранит |
 |---|---|

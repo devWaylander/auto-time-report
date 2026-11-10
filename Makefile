@@ -85,13 +85,18 @@ vault: secrets ## Создать хранилище доступов: make vault
 
 # --- Docker ---
 
-.PHONY: up
-up: preflight ## Собрать и поднять всё в Docker (миграции накатятся сами)
-	$(COMPOSE) up -d --build
+# Перед подъёмом всё гасим: при пересоздании vpn бот иначе пытается войти в сеть ещё не запущенного
+# контейнера. Идущая отправка при этом оборвётся, дублей не будет - бот проверяет Jira перед записью
 
-.PHONY: start
-start: preflight ## Поднять из готовых образов без сборки: на слабом сервере после make ship
+.PHONY: up
+up: preflight ## Поднять из готовых образов без сборки: на сервере после make ship (миграции накатятся сами)
+	$(COMPOSE) down
 	$(COMPOSE) up -d --no-build
+
+.PHONY: up-build
+up-build: preflight ## Собрать образы и поднять всё в Docker: там, где сборка не мучает машину
+	$(COMPOSE) down
+	$(COMPOSE) up -d --build
 
 .PHONY: ship
 ship: ## Собрать образы у себя и залить на сервер: make ship host=user@server (порт - через SSH="ssh -p 2222")
@@ -100,7 +105,7 @@ ship: ## Собрать образы у себя и залить на серве
 		test "$$remote" = "$$(uname -m)" || { echo "Архитектура сервера ($$remote) не совпадает с локальной ($$(uname -m))"; exit 1; }
 	$(COMPOSE) build
 	docker save $(IMAGES) | gzip | $(SSH) $(host) 'gunzip | docker load'
-	@echo "Готово: на сервере make start"
+	@echo "Готово: на сервере make up"
 
 # Общие проверки перед запуском контейнеров
 .PHONY: preflight
