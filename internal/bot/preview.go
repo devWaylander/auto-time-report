@@ -198,11 +198,12 @@ func renderPreview(in previewInput) string {
 		case d.Kind == calendar.Short:
 			note = " <i>(сокращённый)</i>"
 		}
+		// Пустой день - просто прочерк: "0ч" читался бы как сознательно записанный ноль
 		total := "-"
 		if d.Total > 0 {
-			total = parser.FormatDuration(d.Total)
+			total = "- " + parser.FormatDuration(d.Total)
 		}
-		fmt.Fprintf(&b, "%s %s - %s%s%s\n", weekdays[d.Date.Weekday()], d.Date.Format("02.01"), total, note, mark)
+		fmt.Fprintf(&b, "%s %s %s%s%s\n", weekdays[d.Date.Weekday()], d.Date.Format("02.01"), total, note, mark)
 		if len(d.Issues) > 0 {
 			fmt.Fprintf(&b, "    <i>%s</i>\n", html.EscapeString(strings.Join(d.Issues, ", ")))
 		}
