@@ -66,7 +66,7 @@ func run() error {
 		vpn.Username = ask(in, "  Логин: ")
 		vpn.Password = askSecret("  Пароль: ")
 		routes := ask(in, "  Подсети через туннель, через запятую (лучше только адрес Jira, например 10.1.2.3/32): ")
-		for _, r := range strings.Split(routes, ",") {
+		for r := range strings.SplitSeq(routes, ",") {
 			if r = strings.TrimSpace(r); r != "" {
 				vpn.Routes = append(vpn.Routes, r)
 			}

@@ -173,8 +173,7 @@ func Open(path string, passphrase []byte) (Credentials, error) {
 	}
 	r, err := age.Decrypt(bytes.NewReader(blob), identity)
 	if err != nil {
-		var noMatch *age.NoIdentityMatchError
-		if errors.As(err, &noMatch) {
+		if _, ok := errors.AsType[*age.NoIdentityMatchError](err); ok {
 			return Credentials{}, ErrBadPassphrase
 		}
 		return Credentials{}, fmt.Errorf("decrypt creds: %w", err)

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -204,9 +205,7 @@ func (c *Client) CreateWorklog(ctx context.Context, in WorklogInput) (Created, e
 	}
 
 	form := url.Values{}
-	for k, v := range c.extra {
-		form[k] = v
-	}
+	maps.Copy(form, c.extra)
 	next := in.Date.AddDate(0, 0, 1)
 	for k, v := range map[string]string{
 		"inline":                           "true",
@@ -281,9 +280,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, ou
 	// Отключает XSRF-проверку Jira для скриптов вместо atl_token из браузерной сессии
 	req.Header.Set("X-Atlassian-Token", "no-check")
 	for _, h := range headers {
-		for k, v := range h {
-			req.Header[k] = v
-		}
+		maps.Copy(req.Header, h)
 	}
 
 	resp, err := c.http.Do(req)
@@ -326,8 +323,7 @@ func (c *Client) networkError(method, path string, err error) error {
 	case errors.As(err, &opErr):
 		reason = opErr.Op + ": " + opErr.Err.Error()
 	default:
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
+		if urlErr, ok := errors.AsType[*url.Error](err); ok {
 			err = urlErr.Err
 		}
 		reason = err.Error()

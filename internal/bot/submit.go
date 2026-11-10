@@ -259,7 +259,7 @@ func renderOutcome(o corp.Outcome, runErr error) string {
 	if runErr == nil {
 		b.WriteString("✅ <b>Готово</b>\n")
 	} else {
-		b.WriteString("❌ <b>Остановился:</b> " + describeError(runErr) + "\n")
+		fmt.Fprintf(&b, "❌ <b>Остановился:</b> %s\n", describeError(runErr))
 	}
 
 	for _, r := range o.Worklogs {

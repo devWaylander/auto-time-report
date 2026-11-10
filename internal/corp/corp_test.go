@@ -175,6 +175,8 @@ func fakeOpenVPN(t *testing.T, dir, wantPass string, fail bool) <-chan []string 
 				return
 			}
 		}
+		// Бот закрыл соединение - для фейка это обычный конец сессии
+		_ = sc.Err()
 		got <- cmds
 	}()
 	return got

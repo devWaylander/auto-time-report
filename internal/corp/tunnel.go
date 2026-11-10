@@ -167,6 +167,9 @@ func readLines(conn net.Conn) <-chan string {
 		for sc.Scan() {
 			ch <- strings.TrimRight(sc.Text(), "\r")
 		}
+		// Ошибка чтения для нас то же, что закрытие сокета: канал закрывается, и connect сообщит,
+		// что openvpn оборвал management-соединение
+		_ = sc.Err()
 	}()
 	return ch
 }

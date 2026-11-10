@@ -484,11 +484,11 @@ var helpText = func() string {
 		if c.name == "help" {
 			continue
 		}
-		b.WriteString("/" + c.name)
+		fmt.Fprintf(&b, "/%s", c.name)
 		if c.example != "" {
-			b.WriteString(" " + c.example)
+			fmt.Fprintf(&b, " %s", c.example)
 		}
-		b.WriteString(" - " + c.about + c.more + "\n")
+		fmt.Fprintf(&b, " - %s%s\n", c.about, c.more)
 	}
 	b.WriteString("\nПароль-фразу отправляй <b>только</b> в ответ на мой запрос, который пришёл сразу после твоего нажатия кнопки.")
 	return b.String()
