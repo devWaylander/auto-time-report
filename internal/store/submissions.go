@@ -7,18 +7,21 @@ import (
 	"time"
 )
 
-// Submission - успешно записанный в Jira worklog для пары "задача + дата"
+// Submission - worklog в Jira для пары "задача + дата": записанный ботом или найденный там перед записью
 type Submission struct {
 	ID         int64
 	UserID     int64
 	WeekPostID int64 // 0 - пост неизвестен или удалён
 	IssueKey   string
 	WorkDate   time.Time
-	Duration   time.Duration
-	Comment    string
-	WorklogID  int64
-	PeriodID   int64
-	CreatedAt  time.Time
+	// У записи бота - сколько он записал, у найденной в Jira - сколько там стоит на момент проверки
+	Duration time.Duration
+	Comment  string
+	// Manual - worklog нашёлся в Jira, но создавал его не бот. У таких нет WorklogID и PeriodID (нули)
+	Manual    bool
+	WorklogID int64
+	PeriodID  int64
+	CreatedAt time.Time
 }
 
 // SaveSubmission сохраняет запись о worklog'е; повтор той же пары "задача + дата" - ошибка
@@ -31,13 +34,14 @@ func (s *Store) SaveSubmission(ctx context.Context, sub Submission) (Submission,
 		weekPostID = sql.NullInt64{Int64: sub.WeekPostID, Valid: true}
 	}
 
+	// Нули пишем как NULL: тогда CHECK в схеме не даст сохранить запись бота без ID
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO submissions
-		    (user_id, week_post_id, issue_key, work_date, duration_seconds, comment, worklog_id, period_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		    (user_id, week_post_id, issue_key, work_date, duration_seconds, comment, manual, worklog_id, period_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id, created_at`,
 		sub.UserID, weekPostID, sub.IssueKey, formatDate(sub.WorkDate), int64(sub.Duration/time.Second),
-		sub.Comment, sub.WorklogID, sub.PeriodID,
+		sub.Comment, sub.Manual, nullID(sub.WorklogID), nullID(sub.PeriodID),
 	).Scan(&sub.ID, &createdAt)
 	if err != nil {
 		return Submission{}, fmt.Errorf("insert submission: %w", err)
@@ -53,7 +57,7 @@ func (s *Store) SaveSubmission(ctx context.Context, sub Submission) (Submission,
 func (s *Store) SubmissionsBetween(ctx context.Context, userID int64, from, to time.Time) ([]Submission, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, user_id, week_post_id, issue_key, work_date, duration_seconds, comment,
-		       worklog_id, period_id, created_at
+		       manual, worklog_id, period_id, created_at
 		FROM submissions
 		WHERE user_id = ? AND work_date BETWEEN ? AND ?
 		ORDER BY work_date, issue_key`,
@@ -67,18 +71,19 @@ func (s *Store) SubmissionsBetween(ctx context.Context, userID int64, from, to t
 	var subs []Submission
 	for rows.Next() {
 		var (
-			sub                 Submission
-			weekPostID          sql.NullInt64
-			workDate, createdAt string
-			seconds             int64
+			sub                           Submission
+			weekPostID, worklogID, period sql.NullInt64
+			workDate, createdAt           string
+			seconds                       int64
 		)
 		err := rows.Scan(&sub.ID, &sub.UserID, &weekPostID, &sub.IssueKey, &workDate, &seconds, &sub.Comment,
-			&sub.WorklogID, &sub.PeriodID, &createdAt)
+			&sub.Manual, &worklogID, &period, &createdAt)
 		if err != nil {
 			return nil, fmt.Errorf("scan submission: %w", err)
 		}
 
 		sub.WeekPostID = weekPostID.Int64
+		sub.WorklogID, sub.PeriodID = worklogID.Int64, period.Int64
 		sub.Duration = time.Duration(seconds) * time.Second
 		if sub.WorkDate, err = parseDate(workDate); err != nil {
 			return nil, err
@@ -92,6 +97,10 @@ func (s *Store) SubmissionsBetween(ctx context.Context, userID int64, from, to t
 		return nil, fmt.Errorf("iterate submissions: %w", err)
 	}
 	return subs, nil
+}
+
+func nullID(id int64) sql.NullInt64 {
+	return sql.NullInt64{Int64: id, Valid: id != 0}
 }
 
 // MarkPeriodRequested отмечает, что период отправлен на проверку; повторная отправка обновляет время

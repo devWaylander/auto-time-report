@@ -85,10 +85,12 @@ func countMethod(calls []apiCall, method string) int {
 	return n
 }
 
-// fakeRunner вместо корпоративной части: запоминает фразу и задание, "записывает" всё
+// fakeRunner вместо корпоративной части: запоминает фразу и задание, "записывает" всё,
+// кроме дней из inJira - те будто уже стоят в Jira руками
 type fakeRunner struct {
 	passphrase string
 	jobs       []corp.Job
+	inJira     map[string]time.Duration // дата 2006-01-02 -> сколько стоит в Jira
 }
 
 func (r *fakeRunner) Run(_ context.Context, passphrase []byte, job corp.Job, hooks corp.Hooks) (corp.Outcome, error) {
@@ -96,6 +98,12 @@ func (r *fakeRunner) Run(_ context.Context, passphrase []byte, job corp.Job, hoo
 	r.jobs = append(r.jobs, job)
 	out := corp.Outcome{}
 	for i, w := range job.Worklogs {
+		if d, ok := r.inJira[w.Date.Format("2006-01-02")]; ok {
+			res := corp.WorklogResult{Job: w, Status: corp.StatusAlreadyInJira, InJira: d}
+			hooks.Found(res)
+			out.Worklogs = append(out.Worklogs, res)
+			continue
+		}
 		res := corp.WorklogResult{Job: w, Status: corp.StatusCreated, WorklogID: int64(5000 + i), PeriodID: 228}
 		if err := hooks.Created(res); err != nil {
 			return out, err
@@ -452,4 +460,44 @@ func lastParam(calls []apiCall, method, param string) string {
 		}
 	}
 	return v
+}
+
+// День, поставленный в Jira руками, бот запоминает: превью считает его записанным, а расхождение с постом
+// видно в итоге отправки
+func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
+	b, tg, runner, st := newTelegramBot(t)
+	ctx := context.Background()
+	runner.inJira = map[string]time.Duration{"2026-10-19": 6 * time.Hour}
+
+	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8 часов\n\n20.10\nРабота - 8 часов", day(10, 19)), false)
+	saved, err := st.LatestWeekPost(ctx, b.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg.take()
+
+	b.pending = &pendingSubmit{postID: saved.ID, hash: hashText(saved.Text), promptID: 7, expires: fixedClock().Add(time.Minute)}
+	b.onMessage(ctx, dm("Str0ng-Passphrase-XYZ"))
+	outcome := strings.Join(tg.sent(tg.take()), "\n")
+	if !strings.Contains(outcome, "уже было в Jira (не ботом), пропустил. ⚠️ В Jira 6ч, в посте 8ч") {
+		t.Fatalf("outcome does not show the mismatch:\n%s", outcome)
+	}
+
+	subs, err := st.SubmissionsBetween(ctx, b.userID, day(10, 19), day(10, 25))
+	if err != nil || len(subs) != 2 || !subs[0].Manual || subs[0].Duration != 6*time.Hour || subs[1].Manual {
+		t.Fatalf("submissions = %+v, %v", subs, err)
+	}
+
+	b.onMessage(ctx, dm("/status"))
+	preview := strings.Join(tg.sent(tg.take()), "\n")
+	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "Пн 19.10 - 8ч ✅ вручную") {
+		t.Fatalf("manual day is not counted as written:\n%s", preview)
+	}
+
+	// Правка поста по такому дню - то же предупреждение, что и для записей бота
+	b.onChannelPost(ctx, edit(&models.Message{ID: int(saved.MessageID), Chat: models.Chat{ID: saved.ChatID}},
+		"19.10\nРабота - 7 часов\n\n20.10\nРабота - 8 часов", day(10, 21)), true)
+	if warn := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(warn, "в Jira (вручную) 6ч, в посте теперь 7ч") {
+		t.Fatalf("no warning for the manual day:\n%s", warn)
+	}
 }

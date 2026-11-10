@@ -31,7 +31,7 @@ func fakeJira(t *testing.T, rejectForm int32) (*httptest.Server, *atomic.Int32, 
 			w.Header().Set("X-AUSERNAME", "john.doe")
 		case r.URL.Path == "/rest/api/2/issue/ABC-1":
 		case r.URL.Path == "/rest/api/2/issue/ABC-1/worklog":
-			_, _ = w.Write([]byte(`{"worklogs":[{"author":{"name":"john.doe"},"started":"2026-10-20T10:00:00.000+0700"}]}`))
+			_, _ = w.Write([]byte(`{"worklogs":[{"author":{"name":"john.doe"},"started":"2026-10-20T10:00:00.000+0700","timeSpentSeconds":21600}]}`))
 		case r.Method == http.MethodPost:
 			n := forms.Add(1)
 			if n == rejectForm {
@@ -86,10 +86,11 @@ func TestRunnerSubmitsAndRequestsApproval(t *testing.T) {
 	srv, forms, approved := fakeJira(t, 0)
 	r := newRunner(t, srv)
 
-	var saved []WorklogResult
+	var saved, found []WorklogResult
 	hooks := Hooks{
 		Progress: func(string) {},
 		Created:  func(res WorklogResult) error { saved = append(saved, res); return nil },
+		Found:    func(res WorklogResult) { found = append(found, res) },
 	}
 	pass := append([]byte(nil), phrase...)
 	out, err := r.Run(context.Background(), pass, job(true), hooks)
@@ -110,6 +111,9 @@ func TestRunnerSubmitsAndRequestsApproval(t *testing.T) {
 	}
 	if forms.Load() != 2 || len(saved) != 2 || saved[0].WorklogID != 1000001 || saved[0].PeriodID != 228 {
 		t.Fatalf("forms %d, saved %+v", forms.Load(), saved)
+	}
+	if len(found) != 1 || found[0].InJira != 6*time.Hour || found[0].Status != StatusAlreadyInJira {
+		t.Fatalf("found = %+v, want one day with 6h already in Jira", found)
 	}
 	if len(out.Approved) != 2 || out.Approved[0] != 100 || out.Approved[1] != 228 || len(*approved) != 2 {
 		t.Fatalf("approved = %v (server saw %v), want [100 228]", out.Approved, *approved)

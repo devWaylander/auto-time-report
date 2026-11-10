@@ -362,13 +362,17 @@ func (b *Bot) changedSubmitted(ctx context.Context, report parser.Report) (strin
 				break
 			}
 		}
+		where := "в Jira"
+		if s.Manual {
+			where = "в Jira (вручную)"
+		}
 		switch {
 		case found == nil:
-			lines = append(lines, fmt.Sprintf("• %s %s: в Jira %s, а из поста запись пропала",
-				s.WorkDate.Format("02.01"), s.IssueKey, parser.FormatDuration(s.Duration)))
+			lines = append(lines, fmt.Sprintf("• %s %s: %s %s, а из поста запись пропала",
+				s.WorkDate.Format("02.01"), s.IssueKey, where, parser.FormatDuration(s.Duration)))
 		case found.Duration() != s.Duration:
-			lines = append(lines, fmt.Sprintf("• %s %s: в Jira %s, в посте теперь %s",
-				s.WorkDate.Format("02.01"), s.IssueKey, parser.FormatDuration(s.Duration), parser.FormatDuration(found.Duration())))
+			lines = append(lines, fmt.Sprintf("• %s %s: %s %s, в посте теперь %s",
+				s.WorkDate.Format("02.01"), s.IssueKey, where, parser.FormatDuration(s.Duration), parser.FormatDuration(found.Duration())))
 		}
 	}
 	if len(lines) == 0 {

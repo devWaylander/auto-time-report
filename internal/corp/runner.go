@@ -43,7 +43,9 @@ type WorklogResult struct {
 	Status    WorklogStatus
 	WorklogID int64
 	PeriodID  int64
-	Err       error
+	// InJira - сколько уже стояло в Jira за этот день, для StatusAlreadyInJira
+	InJira time.Duration
+	Err    error
 }
 
 type Outcome struct {
@@ -59,6 +61,9 @@ type Hooks struct {
 	// Created вызывается сразу после каждого созданного worklog'а, чтобы бот успел его сохранить;
 	// ошибка останавливает отправку, иначе в Jira окажутся worklog'и, о которых бот не знает
 	Created func(WorklogResult) error
+	// Found вызывается для дня, который уже есть в Jira и создан не ботом: бот запоминает его, чтобы
+	// не поднимать VPN ради него снова. Может быть nil
+	Found func(WorklogResult)
 }
 
 type Runner struct {
@@ -139,13 +144,16 @@ func (r *Runner) Run(ctx context.Context, passphrase []byte, job Job, hooks Hook
 		res := &out.Worklogs[i]
 		hooks.Progress(fmt.Sprintf("✍️ Пишу %s за %s (%d из %d)…", w.IssueKey, w.Date.Format("02.01"), i+1, len(job.Worklogs)))
 
-		exists, err := client.HasWorklogOn(ctx, w.IssueKey, w.Date)
+		logged, err := client.LoggedOn(ctx, w.IssueKey, w.Date)
 		if err != nil {
 			res.Status, res.Err = StatusFailed, err
 			return out, err
 		}
-		if exists {
-			res.Status = StatusAlreadyInJira
+		if logged > 0 {
+			res.Status, res.InJira = StatusAlreadyInJira, logged
+			if hooks.Found != nil {
+				hooks.Found(*res)
+			}
 			continue
 		}
 

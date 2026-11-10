@@ -78,7 +78,8 @@ func (b *Bot) loadWeek(ctx context.Context) (weekState, error) {
 	w := weekState{post: post, report: report, submitted: map[string]store.Submission{}}
 	for _, s := range subs {
 		w.submitted[submissionKey(s.IssueKey, s.WorkDate)] = s
-		if slices.Contains(w.unapproved, s.PeriodID) {
+		// У найденных в Jira записей периода нет: на проверку их отправляют вместе с остальными днями
+		if s.Manual || slices.Contains(w.unapproved, s.PeriodID) {
 			continue
 		}
 		requested, err := b.store.PeriodRequested(ctx, b.userID, s.PeriodID)
@@ -129,6 +130,7 @@ type dayLine struct {
 	Total     time.Duration
 	Issues    []string // "ABC-1 6ч", если задач за день больше одной
 	Submitted int      // сколько worklog'ов дня уже в Jira
+	Manual    int      // из них найдено в Jira, но поставлено не ботом
 	Worklogs  int
 }
 
@@ -163,8 +165,11 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 			line.Total += wl.Duration()
 			line.Worklogs++
 			line.Issues = append(line.Issues, wl.IssueKey+" "+parser.FormatDuration(wl.Duration()))
-			if _, ok := w.submitted[submissionKey(wl.IssueKey, wl.Date)]; ok {
+			if s, ok := w.submitted[submissionKey(wl.IssueKey, wl.Date)]; ok {
 				line.Submitted++
+				if s.Manual {
+					line.Manual++
+				}
 			}
 		}
 		if len(line.Issues) < 2 {
@@ -216,6 +221,9 @@ func renderPreview(in previewInput) string {
 		total := "-"
 		if d.Total > 0 {
 			total = "- " + parser.FormatDuration(d.Total)
+		}
+		if d.Manual > 0 {
+			mark += " вручную"
 		}
 		if d.Date.Equal(in.Today) {
 			mark += " · сегодня"

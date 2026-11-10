@@ -122,8 +122,8 @@ func TestInvalidIssueKeyNeverReachesServer(t *testing.T) {
 		if err := c.CheckIssue(ctx, key); err == nil {
 			t.Errorf("CheckIssue(%q) accepted", key)
 		}
-		if _, err := c.HasWorklogOn(ctx, key, time.Now()); err == nil {
-			t.Errorf("HasWorklogOn(%q) accepted", key)
+		if _, err := c.LoggedOn(ctx, key, time.Now()); err == nil {
+			t.Errorf("LoggedOn(%q) accepted", key)
 		}
 		if _, err := c.CreateWorklog(ctx, WorklogInput{IssueKey: key, Date: time.Now(), Duration: time.Hour}); err == nil {
 			t.Errorf("CreateWorklog(%q) accepted", key)
@@ -187,22 +187,23 @@ func TestCheckIssue(t *testing.T) {
 	}
 }
 
-func TestHasWorklogOn(t *testing.T) {
+func TestLoggedOn(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"worklogs":[
-			{"author":{"name":"someone.else"},"started":"2026-10-19T10:00:00.000+0700"},
-			{"author":{"name":"John.Doe"},"started":"2026-10-20T10:00:00.000+0700"}
+			{"author":{"name":"someone.else"},"started":"2026-10-19T10:00:00.000+0700","timeSpentSeconds":28800},
+			{"author":{"name":"John.Doe"},"started":"2026-10-20T10:00:00.000+0700","timeSpentSeconds":21600},
+			{"author":{"name":"john.doe"},"started":"2026-10-20T16:00:00.000+0700","timeSpentSeconds":3600}
 		]}`))
 	})
 	ctx := context.Background()
-	for d, want := range map[string]bool{"2026-10-19": false, "2026-10-20": true, "2026-10-21": false} {
+	for d, want := range map[string]time.Duration{"2026-10-19": 0, "2026-10-20": 7 * time.Hour, "2026-10-21": 0} {
 		date, _ := time.Parse("2006-01-02", d)
-		got, err := c.HasWorklogOn(ctx, "ABC-1", date)
+		got, err := c.LoggedOn(ctx, "ABC-1", date)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got != want {
-			t.Errorf("HasWorklogOn(%s) = %v, want %v", d, got, want)
+			t.Errorf("LoggedOn(%s) = %v, want %v", d, got, want)
 		}
 	}
 }

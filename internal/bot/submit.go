@@ -223,6 +223,17 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 			})
 			return err
 		},
+		Found: func(r corp.WorklogResult) {
+			// Запоминаем, чтобы превью считало день записанным и не звало в VPN ради него снова.
+			// Не вышло - не страшно: при следующей отправке бот найдёт его в Jira заново
+			_, err := b.store.SaveSubmission(dbCtx, store.Submission{
+				UserID: b.userID, WeekPostID: w.post.ID, IssueKey: r.Job.IssueKey, WorkDate: r.Job.Date,
+				Duration: r.InJira, Manual: true,
+			})
+			if err != nil {
+				slog.Error("save worklog found in jira", "error", err)
+			}
+		},
 	}
 	outcome, runErr := b.runner.Run(ctx, passphrase, job, hooks)
 	for _, period := range outcome.Approved {
@@ -271,6 +282,9 @@ func renderOutcome(o corp.Outcome, runErr error) string {
 			state = "записано"
 		case corp.StatusAlreadyInJira:
 			state = "уже было в Jira (не ботом), пропустил"
+			if r.InJira != r.Job.Duration {
+				state += fmt.Sprintf(". ⚠️ В Jira %s, в посте %s", parser.FormatDuration(r.InJira), parser.FormatDuration(r.Job.Duration))
+			}
 		case corp.StatusFailed:
 			state = "ошибка"
 		default:

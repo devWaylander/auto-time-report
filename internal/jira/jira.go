@@ -151,34 +151,38 @@ func (c *Client) CheckIssue(ctx context.Context, key string) error {
 	}
 }
 
-// HasWorklogOn сообщает, есть ли в задаче worklog текущего пользователя на эту дату (поставленный не ботом)
-func (c *Client) HasWorklogOn(ctx context.Context, key string, date time.Time) (bool, error) {
+// LoggedOn - сколько времени текущий пользователь записал в задачу за эту дату; 0 - ничего.
+// Бот вызывает её перед записью, поэтому всё найденное поставлено не им
+func (c *Client) LoggedOn(ctx context.Context, key string, date time.Time) (time.Duration, error) {
 	if !issueKeyRe.MatchString(key) {
-		return false, fmt.Errorf("jira: invalid issue key %q", key)
+		return 0, fmt.Errorf("jira: invalid issue key %q", key)
 	}
 	var body struct {
 		Worklogs []struct {
 			Author struct {
 				Name string `json:"name"`
 			} `json:"author"`
-			Started string `json:"started"`
+			Started          string `json:"started"`
+			TimeSpentSeconds int64  `json:"timeSpentSeconds"`
 		} `json:"worklogs"`
 	}
 	resp, err := c.do(ctx, http.MethodGet, "/rest/api/2/issue/"+key+"/worklog", nil, &body)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("jira: list worklogs %s: status %d", key, resp.StatusCode)
+		return 0, fmt.Errorf("jira: list worklogs %s: status %d", key, resp.StatusCode)
 	}
 
 	day := date.Format("2006-01-02")
+	var total time.Duration
 	for _, w := range body.Worklogs {
 		if strings.EqualFold(w.Author.Name, c.username) && strings.HasPrefix(w.Started, day) {
-			return true, nil
+			// Даже запись в 0 секунд значит, что день трогали руками: считаем его занятым
+			total += max(time.Duration(w.TimeSpentSeconds)*time.Second, time.Second)
 		}
 	}
-	return false, nil
+	return total, nil
 }
 
 // WorklogInput - что записать

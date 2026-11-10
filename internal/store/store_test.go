@@ -303,6 +303,41 @@ func TestSubmissions(t *testing.T) {
 		!first.WorkDate.Equal(sub.WorkDate) || first.WorklogID != sub.WorklogID || first.PeriodID != sub.PeriodID {
 		t.Fatalf("submission = %+v, want %+v", first, saved)
 	}
+	if first.Manual {
+		t.Fatal("bot submission read back as manual")
+	}
+}
+
+// Найденный в Jira worklog сохраняется без ID, а запись бота без ID схема не пропускает
+func TestManualSubmissions(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	u, err := s.EnsureUser(ctx, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manual := Submission{UserID: u.ID, IssueKey: "ABC-1", WorkDate: date(t, "2026-11-09"), Duration: 6 * time.Hour, Manual: true}
+	if _, err := s.SaveSubmission(ctx, manual); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []Submission{
+		{UserID: u.ID, IssueKey: "ABC-1", WorkDate: date(t, "2026-11-10"), Duration: time.Hour},
+		{UserID: u.ID, IssueKey: "ABC-1", WorkDate: date(t, "2026-11-11"), Duration: time.Hour, WorklogID: 1},
+		{UserID: u.ID, IssueKey: "ABC-1", WorkDate: date(t, "2026-11-12"), Duration: time.Hour, PeriodID: 1},
+	} {
+		if _, err := s.SaveSubmission(ctx, bad); err == nil {
+			t.Errorf("bot submission without IDs accepted: %+v", bad)
+		}
+	}
+
+	got, err := s.SubmissionsBetween(ctx, u.ID, date(t, "2026-11-09"), date(t, "2026-11-15"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].Manual || got[0].WorklogID != 0 || got[0].PeriodID != 0 || got[0].Duration != 6*time.Hour {
+		t.Fatalf("submissions = %+v", got)
+	}
 }
 
 func TestPeriodApprovals(t *testing.T) {
