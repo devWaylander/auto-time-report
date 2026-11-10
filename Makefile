@@ -14,6 +14,9 @@ GO_VERSION := $(shell awk '/^go /{print $$2}' go.mod)
 LINT       := GOTOOLCHAIN=go$(GO_VERSION) go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 # dbmate запускается в контейнере из docker-compose.yml, локальная установка не нужна
 DBMATE  := $(COMPOSE) run --rm --no-deps migrate
+# Образы, которые собирает compose (имя проекта задано в docker-compose.yml), и чем ходить на сервер в make ship
+IMAGES  := auto-time-report-bot auto-time-report-vpn
+SSH     ?= ssh
 
 .PHONY: help
 help: ## Показать список команд
@@ -83,10 +86,26 @@ vault: secrets ## Создать хранилище доступов: make vault
 # --- Docker ---
 
 .PHONY: up
-up: data ## Собрать и поднять всё в Docker (миграции накатятся сами)
+up: preflight ## Собрать и поднять всё в Docker (миграции накатятся сами)
+	$(COMPOSE) up -d --build
+
+.PHONY: start
+start: preflight ## Поднять из готовых образов без сборки: на слабом сервере после make ship
+	$(COMPOSE) up -d --no-build
+
+.PHONY: ship
+ship: ## Собрать образы у себя и залить на сервер: make ship host=user@server (порт - через SSH="ssh -p 2222")
+	@test -n "$(host)" || { echo "Укажи сервер: make ship host=user@server"; exit 1; }
+	@remote=$$($(SSH) $(host) uname -m) && test "$$remote" = "$$(uname -m)" || { echo "Архитектура сервера ($$remote) не совпадает с локальной ($$(uname -m))"; exit 1; }
+	$(COMPOSE) build
+	docker save $(IMAGES) | gzip | $(SSH) $(host) 'gunzip | docker load'
+	@echo "Готово: на сервере make start"
+
+# Общие проверки перед запуском контейнеров
+.PHONY: preflight
+preflight: data
 	@test "$(HOST_UID)" != "0" || { echo "Не запускай от root: контейнеры работают под твоим пользователем"; exit 1; }
 	@test -f secrets/telegram_bot_token && test -f secrets/creds.age || { echo "Нет секретов: make token и make vault"; exit 1; }
-	$(COMPOSE) up -d --build
 
 .PHONY: down
 down: ## Остановить контейнеры
