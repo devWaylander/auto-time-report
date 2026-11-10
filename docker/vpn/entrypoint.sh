@@ -9,6 +9,15 @@ max="${VPN_MAX_SESSION:-360}"
 # Сокет и файлы доступны группе бота, остальным - нет
 umask 007
 
+# Путь к хосту (там прокси к Telegram, TELEGRAM_PROXY_URL) закрепляем через Docker /32-маршрутом:
+# он точнее любой сети туннеля, и даже если адреса корпоративного VPN пересекаются с сетью Docker,
+# бот не теряет Telegram на время отправки
+host=$(getent hosts host.docker.internal | awk '{print $1; exit}')
+gw=$(ip -4 route show default | awk '{print $3; exit}')
+if [ -n "$host" ] && [ -n "$gw" ]; then
+	ip route replace "$host/32" via "$gw" || echo "vpn sidecar: could not pin the route to the host"
+fi
+
 echo "vpn sidecar: ready"
 while :; do
 	if [ -f "$cfg" ]; then

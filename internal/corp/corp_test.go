@@ -94,7 +94,17 @@ func TestBuildConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := buildConfig("client\nauth-user-pass /etc/pass.txt\n", "/run/vpn/mgmt.sock", routes)
+	user := "client\nauth-user-pass /etc/pass.txt\nredirect-gateway def1\nroute 172.16.0.0 255.240.0.0\n" +
+		"  Redirect-Private local\nroute-ipv6 ::/0\n<ca>\nroutebase64\n</ca>\n"
+	cfg := buildConfig(user, "/run/vpn/mgmt.sock", routes)
+	for _, gone := range []string{"redirect-gateway", "Redirect-Private", "172.16.0.0", "route-ipv6"} {
+		if strings.Contains(cfg, gone) {
+			t.Errorf("routing directive %q from the user config survived:\n%s", gone, cfg)
+		}
+	}
+	if !strings.Contains(cfg, "<ca>\nroutebase64\n</ca>\n") {
+		t.Errorf("inline block is damaged:\n%s", cfg)
+	}
 	for _, want := range []string{
 		"management /run/vpn/mgmt.sock unix",
 		"management-query-passwords",

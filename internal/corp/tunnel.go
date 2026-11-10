@@ -84,10 +84,22 @@ func (t *Tunnel) Up(ctx context.Context, creds VPNCredentials) (*Session, error)
 	return s, nil
 }
 
-// buildConfig дописывает к конфигу пользователя наши директивы; более поздние перекрывают ранние
+// Директивы маршрутизации из .ovpn: route-nopull отсекает только присланное сервером, а эти
+// из самого файла сработали бы и увели в туннель весь трафик или чужие сети, включая путь к Telegram
+var routingDirectives = map[string]bool{
+	"redirect-gateway": true, "redirect-private": true, "route": true, "route-ipv6": true,
+}
+
+// buildConfig дописывает к конфигу пользователя наши директивы; более поздние перекрывают ранние.
+// Маршруты из конфига пользователя выкидываются: через туннель идёт только перечисленное в хранилище
 func buildConfig(userConfig, sockPath string, routes []*net.IPNet) string {
 	var b strings.Builder
-	b.WriteString(userConfig)
+	for line := range strings.Lines(userConfig) {
+		if fields := strings.Fields(line); len(fields) > 0 && routingDirectives[strings.ToLower(fields[0])] {
+			continue
+		}
+		b.WriteString(line)
+	}
 	b.WriteString("\n\n# --- auto-time-report ---\n")
 	fmt.Fprintf(&b, "management %s unix\n", sockPath)
 	b.WriteString("management-hold\n")

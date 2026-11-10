@@ -192,7 +192,11 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 		slog.Error("send status", "error", err)
 		return
 	}
-	progress := func(text string) { b.edit(ctx, status.ID, html.EscapeString(text), nil) }
+	// Шаги отправки дублируются в лог: если Telegram недоступен, по логу видно, докуда дошло
+	progress := func(text string) {
+		slog.Info("submit", "step", text)
+		b.edit(ctx, status.ID, html.EscapeString(text), nil)
+	}
 
 	w, err := b.loadWeek(ctx)
 	if err != nil || w.post.ID != p.postID || hashText(w.post.Text) != p.hash {
@@ -235,6 +239,13 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 	if runErr != nil {
 		slog.Error("submit", "error", runErr)
 	}
+	created := 0
+	for _, r := range outcome.Worklogs {
+		if r.Status == corp.StatusCreated {
+			created++
+		}
+	}
+	slog.Info("submit finished", "created", created, "approved", len(outcome.Approved))
 	progress("Отправка завершена, итог ниже.")
 	b.notify(dbCtx, renderOutcome(outcome, runErr))
 }

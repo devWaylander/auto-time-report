@@ -40,6 +40,8 @@ services:
   vpn:
     <<: *hardening
     build: ./docker/vpn
+    # tini в роли PID 1: скрипт sidecar'а сам SIGTERM не обрабатывает, и остановка ждала бы таймаут
+    init: true
     # Root без CAP_DAC_OVERRIDE работает с файлами через группу бота: так он читает конфиг, а бот - сокет
     user: "0:${HOST_GID:-1000}"
     cap_add: [NET_ADMIN]
