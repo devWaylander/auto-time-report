@@ -70,6 +70,7 @@ func run() error {
 		ChannelID:    cfg.TelegramChannelID,
 		DefaultIssue: cfg.DefaultIssue,
 		Location:     cfg.Timezone,
+		ProxyURL:     cfg.TelegramProxyURL,
 	}, st, cal, runner, user.ID)
 	if err != nil {
 		return err

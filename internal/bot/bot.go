@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/devWaylander/auto-time-report/internal/calendar"
+	"github.com/devWaylander/auto-time-report/internal/config"
 	"github.com/devWaylander/auto-time-report/internal/corp"
 	"github.com/devWaylander/auto-time-report/internal/parser"
 	"github.com/devWaylander/auto-time-report/internal/secret"
@@ -40,6 +42,8 @@ type Config struct {
 	Location     *time.Location
 	// Адрес Bot API; пусто - api.telegram.org. Нужен тестам и для своего Bot API сервера
 	ServerURL string
+	// Прокси для запросов к Bot API; пусто - напрямую
+	ProxyURL secret.String
 }
 
 const (
@@ -83,6 +87,16 @@ func New(cfg Config, st *store.Store, cal Calendar, runner Runner, userID int64)
 	}
 	if cfg.ServerURL != "" {
 		opts = append(opts, tgbot.WithServerURL(cfg.ServerURL))
+	}
+	if cfg.ProxyURL != "" {
+		proxy, err := config.ParseProxyURL(cfg.ProxyURL.Reveal())
+		if err != nil {
+			return nil, fmt.Errorf("telegram proxy: %w", err)
+		}
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.Proxy = http.ProxyURL(proxy)
+		// Таймауты как у клиента библиотеки по умолчанию: long polling держит запрос до минуты
+		opts = append(opts, tgbot.WithHTTPClient(time.Minute, &http.Client{Timeout: time.Minute, Transport: tr}))
 	}
 	api, err := tgbot.New(cfg.Token.Reveal(), opts...)
 	if err != nil {
@@ -159,6 +173,11 @@ func (b *Bot) onError(err error) {
 func (b *Bot) redact(s string) string {
 	if token := b.cfg.Token.Reveal(); token != "" {
 		s = strings.ReplaceAll(s, token, "***")
+	}
+	if u, err := config.ParseProxyURL(b.cfg.ProxyURL.Reveal()); err == nil {
+		if pass, ok := u.User.Password(); ok && pass != "" {
+			s = strings.ReplaceAll(s, pass, "***")
+		}
 	}
 	return s
 }

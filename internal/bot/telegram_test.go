@@ -8,12 +8,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-telegram/bot/models"
 
 	"github.com/devWaylander/auto-time-report/internal/corp"
+	"github.com/devWaylander/auto-time-report/internal/secret"
 	"github.com/devWaylander/auto-time-report/internal/store"
 )
 
@@ -330,4 +332,40 @@ func TestCancelWhilePending(t *testing.T) {
 		t.Fatal("/cancel did not cancel or was taken as passphrase")
 	}
 	tg.take()
+}
+
+// Все запросы к Bot API идут через прокси из конфига, а его пароль не попадает в логи
+func TestTelegramProxy(t *testing.T) {
+	tg := &fakeTelegram{}
+	var proxied atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Proxy-Authorization") == "" {
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		proxied.Add(1)
+		tg.ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+
+	base, st := newTestBot(t, nil)
+	cfg := base.cfg
+	// Сам Bot API недоступен: без прокси бот не стартует
+	cfg.ServerURL = "http://telegram.invalid"
+	cfg.ProxyURL = secret.String("http://bot:s3cret@" + strings.TrimPrefix(proxy.URL, "http://"))
+	b, err := New(cfg, st, base.cal, &fakeRunner{}, base.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxied.Load() == 0 || countMethod(tg.take(), "getMe") != 1 {
+		t.Fatalf("getMe did not go through the proxy: proxied=%d", proxied.Load())
+	}
+	if got := b.redact("proxyconnect: http://bot:s3cret@host"); strings.Contains(got, "s3cret") {
+		t.Fatalf("redact = %q", got)
+	}
+
+	cfg.ProxyURL = "ss://bot:s3cret@host:1"
+	if _, err := New(cfg, st, base.cal, &fakeRunner{}, base.userID); err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("bad proxy: err = %v", err)
+	}
 }

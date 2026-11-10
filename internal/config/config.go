@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -19,6 +20,9 @@ type Config struct {
 	TelegramToken     secret.String
 	TelegramOwnerID   int64
 	TelegramChannelID int64
+	// Прокси только для Telegram, если Bot API недоступен с сервера напрямую; пусто - напрямую.
+	// secret.String: в адресе бывают логин и пароль прокси
+	TelegramProxyURL secret.String
 
 	DefaultIssue string
 	StartTime    string // ЧЧ:ММ, время начала каждого worklog'а
@@ -71,6 +75,11 @@ func Load() (Config, error) {
 	check("TELEGRAM_OWNER_ID", err)
 	c.TelegramChannelID, err = strconv.ParseInt(req("TELEGRAM_CHANNEL_ID"), 10, 64)
 	check("TELEGRAM_CHANNEL_ID", err)
+	if v := opt("TELEGRAM_PROXY_URL", ""); v != "" {
+		_, err := ParseProxyURL(v)
+		check("TELEGRAM_PROXY_URL", err)
+		c.TelegramProxyURL = secret.String(v)
+	}
 
 	c.DefaultIssue = opt("JIRA_DEFAULT_ISSUE_KEY", "")
 	if c.DefaultIssue != "" && !issueKeyRe.MatchString(c.DefaultIssue) {
@@ -94,6 +103,24 @@ func Load() (Config, error) {
 		return Config{}, errors.Join(errs...)
 	}
 	return c, nil
+}
+
+// ParseProxyURL разбирает адрес прокси: http, https или socks5 с хостом и портом.
+// В ошибке нет самого адреса: в нём может быть пароль
+func ParseProxyURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, errors.New("not a valid URL")
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return nil, errors.New("scheme must be http, https, socks5 or socks5h")
+	}
+	if u.Hostname() == "" || u.Port() == "" {
+		return nil, errors.New("host and port are required, e.g. socks5://host.docker.internal:10808")
+	}
+	return u, nil
 }
 
 func readSecretFile(path string) (secret.String, error) {

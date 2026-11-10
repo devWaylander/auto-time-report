@@ -45,6 +45,10 @@ services:
     cap_add: [NET_ADMIN]
     devices:
       - /dev/net/tun:/dev/net/tun
+    # Адрес хоста для бота, например для прокси к Telegram (TELEGRAM_PROXY_URL). Бот живёт в сети
+    # этого контейнера, поэтому запись задаётся здесь и видна обоим
+    extra_hosts:
+      - host.docker.internal:host-gateway
     environment:
       VPN_RUN_DIR: /run/vpn
       VPN_DEBUG: "${VPN_DEBUG:-0}"
