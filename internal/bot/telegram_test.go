@@ -369,3 +369,41 @@ func TestTelegramProxy(t *testing.T) {
 		t.Fatalf("bad proxy: err = %v", err)
 	}
 }
+
+// Меню команд выставляется только в личке владельца, и каждая команда из него обрабатывается,
+// а не удаляется как неизвестная
+func TestCommandMenu(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	b.setCommands(context.Background())
+	calls := tg.take()
+	if countMethod(calls, "setMyCommands") != 1 {
+		t.Fatalf("calls = %+v", calls)
+	}
+	var set apiCall
+	for _, c := range calls {
+		if c.method == "setMyCommands" {
+			set = c
+		}
+	}
+	if !strings.Contains(set.params["scope"], `"type":"chat"`) ||
+		!strings.Contains(set.params["scope"], fmt.Sprintf(`"chat_id":%d`, b.cfg.OwnerID)) {
+		t.Errorf("scope = %s", set.params["scope"])
+	}
+	var menu []models.BotCommand
+	if err := json.Unmarshal([]byte(set.params["commands"]), &menu); err != nil {
+		t.Fatal(err)
+	}
+	if len(menu) != len(commands) {
+		t.Fatalf("menu = %+v", menu)
+	}
+
+	for _, c := range menu {
+		if c.Command != "help" && !strings.Contains(helpText, "/"+c.Command) {
+			t.Errorf("/%s is not in /help", c.Command)
+		}
+		b.onMessage(context.Background(), dm("/"+c.Command))
+		if countMethod(tg.take(), "deleteMessage") != 0 {
+			t.Errorf("/%s is deleted as unknown", c.Command)
+		}
+	}
+}

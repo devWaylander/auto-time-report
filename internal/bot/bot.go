@@ -108,6 +108,7 @@ func New(cfg Config, st *store.Store, cal Calendar, runner Runner, userID int64)
 
 // Start слушает Telegram, пока не отменят контекст
 func (b *Bot) Start(ctx context.Context) {
+	b.setCommands(ctx)
 	b.api.Start(ctx)
 }
 
@@ -454,20 +455,63 @@ func (b *Bot) onCallback(ctx context.Context, cq *models.CallbackQuery) {
 	}
 }
 
-const helpText = `<b>Что я умею</b>
+// command - команда бота. Из этого списка собираются /help и меню команд в Telegram, которое бот
+// выставляет при каждом старте: новую команду достаточно добавить сюда и в switch выше
+type command struct {
+	name    string // без слэша
+	example string // аргументы для примера в /help
+	about   string // описание: в меню Telegram и в /help
+	more    string // дополнение для /help
+}
 
-Пиши пост недели в канал как обычно: я сам вижу каждую правку и пишу сюда, если нашёл ошибку.
+var commands = []command{
+	{name: "status", about: "превью недели"},
+	{name: "submit", about: "превью с кнопками отправки в Jira"},
+	{name: "settings", about: "напоминания и пауза"},
+	{name: "daily", example: "19:30", about: "время ежедневного напоминания"},
+	{name: "weekly", example: "пт 16:00", about: "день и время недельного превью"},
+	{name: "vacation", example: "27.10-31.10", about: "отпуск без напоминаний", more: ", /vacation off - отменить"},
+	{name: "cancel", about: "отменить ожидание пароль-фразы"},
+	{name: "unlock", about: "снять блокировку после ошибки доступа"},
+	{name: "help", about: "что я умею"},
+}
 
-/status - превью недели
-/submit - превью с кнопками отправки в Jira
-/settings - напоминания и пауза
-/daily 19:30 - время ежедневного напоминания
-/weekly пт 16:00 - день и время недельного превью
-/vacation 27.10-31.10 - отпуск без напоминаний, /vacation off - отменить
-/cancel - отменить ожидание пароль-фразы
-/unlock - снять блокировку после ошибки доступа
+var helpText = func() string {
+	var b strings.Builder
+	b.WriteString("<b>Что я умею</b>\n\n")
+	b.WriteString("Пиши пост недели в канал как обычно: я сам вижу каждую правку и пишу сюда, если нашёл ошибку.\n\n")
+	for _, c := range commands {
+		if c.name == "help" {
+			continue
+		}
+		b.WriteString("/" + c.name)
+		if c.example != "" {
+			b.WriteString(" " + c.example)
+		}
+		b.WriteString(" - " + c.about + c.more + "\n")
+	}
+	b.WriteString("\nПароль-фразу отправляй <b>только</b> в ответ на мой запрос, который пришёл сразу после твоего нажатия кнопки.")
+	return b.String()
+}()
 
-Пароль-фразу отправляй <b>только</b> в ответ на мой запрос, который пришёл сразу после твоего нажатия кнопки.`
+// setCommands выставляет меню команд только в личке владельца: посторонний не увидит даже списка
+func (b *Bot) setCommands(ctx context.Context) {
+	menu := make([]models.BotCommand, len(commands))
+	for i, c := range commands {
+		desc := c.about
+		if c.example != "" {
+			desc += ", например /" + c.name + " " + c.example
+		}
+		menu[i] = models.BotCommand{Command: c.name, Description: desc}
+	}
+	_, err := b.api.SetMyCommands(ctx, &tgbot.SetMyCommandsParams{
+		Commands: menu,
+		Scope:    &models.BotCommandScopeChat{ChatID: b.cfg.OwnerID},
+	})
+	if err != nil {
+		slog.Warn("set bot commands", "error", b.redact(err.Error()))
+	}
+}
 
 // Сколько ошибок разбора показывать: сообщение Telegram ограничено 4096 символами
 const maxShownErrors = 25
