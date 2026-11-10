@@ -96,7 +96,8 @@ start: preflight ## Поднять из готовых образов без с�
 .PHONY: ship
 ship: ## Собрать образы у себя и залить на сервер: make ship host=user@server (порт - через SSH="ssh -p 2222")
 	@test -n "$(host)" || { echo "Укажи сервер: make ship host=user@server"; exit 1; }
-	@remote=$$($(SSH) $(host) uname -m) && test "$$remote" = "$$(uname -m)" || { echo "Архитектура сервера ($$remote) не совпадает с локальной ($$(uname -m))"; exit 1; }
+	@remote=$$($(SSH) $(host) uname -m) || { echo "Не удалось зайти на $(host) по SSH"; exit 1; }; \
+		test "$$remote" = "$$(uname -m)" || { echo "Архитектура сервера ($$remote) не совпадает с локальной ($$(uname -m))"; exit 1; }
 	$(COMPOSE) build
 	docker save $(IMAGES) | gzip | $(SSH) $(host) 'gunzip | docker load'
 	@echo "Готово: на сервере make start"
