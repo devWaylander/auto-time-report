@@ -364,7 +364,7 @@ func (b *Bot) changedSubmitted(ctx context.Context, report parser.Report) (strin
 		}
 		where := "в Jira"
 		if s.Manual {
-			where = "в Jira (вручную)"
+			where = "в Jira вручную"
 		}
 		switch {
 		case found == nil:

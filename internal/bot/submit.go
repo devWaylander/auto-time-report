@@ -281,7 +281,7 @@ func renderOutcome(o corp.Outcome, runErr error) string {
 		case corp.StatusCreated:
 			state = "записано"
 		case corp.StatusAlreadyInJira:
-			state = "уже было в Jira (не ботом), пропустил"
+			state = "уже было в Jira вручную, пропустил"
 			if r.InJira != r.Job.Duration {
 				state += fmt.Sprintf(". ⚠️ В Jira %s, в посте %s", parser.FormatDuration(r.InJira), parser.FormatDuration(r.Job.Duration))
 			}

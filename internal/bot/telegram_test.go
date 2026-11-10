@@ -479,7 +479,7 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 	b.pending = &pendingSubmit{postID: saved.ID, hash: hashText(saved.Text), promptID: 7, expires: fixedClock().Add(time.Minute)}
 	b.onMessage(ctx, dm("Str0ng-Passphrase-XYZ"))
 	outcome := strings.Join(tg.sent(tg.take()), "\n")
-	if !strings.Contains(outcome, "уже было в Jira (не ботом), пропустил. ⚠️ В Jira 6ч, в посте 8ч") {
+	if !strings.Contains(outcome, "уже было в Jira вручную, пропустил. ⚠️ В Jira 6ч, в посте 8ч") {
 		t.Fatalf("outcome does not show the mismatch:\n%s", outcome)
 	}
 
@@ -497,7 +497,7 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 	// Правка поста по такому дню - то же предупреждение, что и для записей бота
 	b.onChannelPost(ctx, edit(&models.Message{ID: int(saved.MessageID), Chat: models.Chat{ID: saved.ChatID}},
 		"19.10\nРабота - 7 часов\n\n20.10\nРабота - 8 часов", day(10, 21)), true)
-	if warn := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(warn, "в Jira (вручную) 6ч, в посте теперь 7ч") {
+	if warn := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(warn, "в Jira вручную 6ч, в посте теперь 7ч") {
 		t.Fatalf("no warning for the manual day:\n%s", warn)
 	}
 }
