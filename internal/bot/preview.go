@@ -9,6 +9,7 @@ import (
 	"html"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,7 +108,11 @@ func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.Rep
 	case errors.Is(err, errNoPost):
 		return "Поста недели пока нет. Напиши его в канал: первая строка - дата, например 19.10", refreshOnly
 	case err != nil && w.post.ID != 0:
-		return "⚠️ В посте недели ошибки, превью не собрать:\n" + formatParseErrors(err), refreshOnly
+		text := "⚠️ В посте недели ошибки, превью не собрать:\n" + formatParseErrors(err)
+		if u := postURL(w.post.ChatID, w.post.MessageID); u != "" {
+			text += fmt.Sprintf("\n\n<a href=\"%s\">Открыть пост</a>", html.EscapeString(u))
+		}
+		return text, refreshOnly
 	case err != nil:
 		slog.Error("load week", "error", err)
 		return "⚠️ Не смог собрать превью, загляни в логи бота.", refreshOnly
@@ -135,6 +140,7 @@ type previewInput struct {
 	Pending      int
 	Unapproved   int
 	CalendarDown bool
+	PostURL      string // ссылка на пост недели в канале; пусто - без ссылки
 }
 
 func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
@@ -173,6 +179,7 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 			in.Days = append(in.Days, line)
 		}
 	}
+	in.PostURL = postURL(w.post.ChatID, w.post.MessageID)
 	in.Pending = len(w.pendingWorklogs())
 	in.Unapproved = len(w.unapproved)
 	return in
@@ -183,7 +190,11 @@ var weekdays = [...]string{"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб
 func renderPreview(in previewInput) string {
 	var b strings.Builder
 	first, last := in.Days[0].Date, in.Days[len(in.Days)-1].Date
-	fmt.Fprintf(&b, "<b>Неделя %s-%s</b>\n\n", first.Format("02.01"), last.Format("02.01.2006"))
+	fmt.Fprintf(&b, "<b>Неделя %s-%s</b>", first.Format("02.01"), last.Format("02.01.2006"))
+	if in.PostURL != "" {
+		fmt.Fprintf(&b, " · <a href=\"%s\">пост</a>", html.EscapeString(in.PostURL))
+	}
+	b.WriteString("\n\n")
 
 	for _, d := range in.Days {
 		mark := ""
@@ -284,6 +295,16 @@ func previewKeyboard(submit bool, postID int64, hash string, pending, unapproved
 var statusButton = models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
 	{{Text: "📊 Статус", CallbackData: viewNew}},
 }}
+
+// postURL - ссылка на сообщение канала. Вид t.me/c/... работает и для закрытых каналов, если ты в них
+// состоишь. У каналов ID начинается с -100, у остальных чатов таких ссылок нет
+func postURL(chatID, messageID int64) string {
+	id, ok := strings.CutPrefix(strconv.FormatInt(chatID, 10), "-100")
+	if !ok || id == "" || messageID <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://t.me/c/%s/%d", id, messageID)
+}
 
 // hashText - короткий отпечаток текста поста: кнопка превью сработает, только если пост с тех пор не менялся
 func hashText(s string) string {

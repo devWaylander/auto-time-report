@@ -121,7 +121,7 @@ func TestPreviewInputAndRender(t *testing.T) {
 
 	// Понедельник и вторник, во вторник две задачи; понедельник уже записан
 	post := "19.10\nРабота - 8 часов\n\n20.10\nДело <b>важное</b> - 6 часов\n\nABC-2\n20.10\nСозвон - 2 часа"
-	saved, _, err := st.SaveWeekPost(ctx, store.WeekPost{UserID: b.userID, ChatID: -100, MessageID: 1, Text: post, PostedAt: day(10, 19)})
+	saved, _, err := st.SaveWeekPost(ctx, store.WeekPost{UserID: b.userID, ChatID: -1001234567890, MessageID: 1, Text: post, PostedAt: day(10, 19)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestPreviewInputAndRender(t *testing.T) {
 
 	text := renderPreview(in)
 	for _, want := range []string{
-		"Неделя 19.10-23.10.2026",
+		`Неделя 19.10-23.10.2026</b> · <a href="https://t.me/c/1234567890/1">пост</a>`,
 		"Пн 19.10 - 8ч ✅",
 		"Вт 20.10 - 8ч",
 		"ABC-1 6ч, ABC-2 2ч",
@@ -322,4 +322,21 @@ func TestRefusal(t *testing.T) {
 
 func parseAt(text string, now time.Time) (parser.Report, error) {
 	return parser.Parse(text, "ABC-1", now)
+}
+
+func TestPostURL(t *testing.T) {
+	for _, tc := range []struct {
+		chat, msg int64
+		want      string
+	}{
+		{-1001234567890, 42, "https://t.me/c/1234567890/42"},
+		{-1234567, 42, ""}, // обычная группа, не канал
+		{123, 42, ""},      // личка
+		{-100, 42, ""},
+		{-1001234567890, 0, ""},
+	} {
+		if got := postURL(tc.chat, tc.msg); got != tc.want {
+			t.Errorf("postURL(%d, %d) = %q, want %q", tc.chat, tc.msg, got, tc.want)
+		}
+	}
 }
