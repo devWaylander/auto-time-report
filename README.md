@@ -128,11 +128,13 @@ make start                        # на сервере вместо make up: п
 
 Если `api.telegram.org` с сервера недоступен (в логах `getMe ... context deadline exceeded`), пусти Telegram через прокси, у которого есть выход к нему, например через Xray на этом же сервере:
 
-1. Inbound `mixed` или `socks` с логином и паролем, порт например `10808`. Контейнеры не видят `127.0.0.1` хоста, поэтому слушать нужно `0.0.0.0`, а снаружи порт закрывает UFW: правило разрешает только сети Docker.
+1. Inbound `mixed` или `socks`, порт например `10808`, слушает `172.17.0.1` - адрес моста Docker на хосте, он же `host.docker.internal` в контейнере. `127.0.0.1` хоста контейнерам не виден, а `0.0.0.0` открыл бы порт всему интернету. Пароль на inbound - по желанию, второй замок.
+2. Адрес `172.17.0.1` появляется вместе с Docker, поэтому прокси должен стартовать после него, иначе после ребута inbound не поднимется. Для x-ui: `systemctl edit x-ui`, добавить `[Unit]`, `After=docker.service`, `Wants=docker.service`, затем `systemctl daemon-reload`.
+3. Контейнеры ходят к хосту через INPUT, который UFW по умолчанию режет, поэтому разреши порт для сетей Docker:
    ```bash
    ufw allow from 172.16.0.0/12 to any port 10808 proto tcp
    ```
-2. В `.env`: `TELEGRAM_PROXY_URL=socks5h://user:password@host.docker.internal:10808`, затем `make start` (или `make up`).
+4. В `.env`: `TELEGRAM_PROXY_URL=socks5h://host.docker.internal:10808` (с паролем - `socks5h://user:password@host.docker.internal:10808`), затем `make start` (или `make up`).
 
 Через прокси идут только запросы к Bot API, внутри них TLS: прокси не видит ни токен, ни пароль-фразу. Jira и VPN через него не ходят.
 

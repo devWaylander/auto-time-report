@@ -45,7 +45,7 @@
 - **bot**: non-root, без capability, `no-new-privileges`, read-only файловая система, без core dump. Сеть - общая с sidecar'ом.
 - **vpn**: root нужен для iproute2 (у не-root он сбрасывает capability), но из capability только `NET_ADMIN`, тоже `no-new-privileges` и read-only. Туннель живёт только в сетевом пространстве этих двух контейнеров, хост его не видит.
 - Наружу не открыт ни один порт: Telegram бот опрашивает сам.
-- Прокси к Telegram (`TELEGRAM_PROXY_URL`) - только для Bot API: TLS идёт насквозь, прокси видит лишь адрес `api.telegram.org`. Inbound прокси - с паролем и закрыт UFW для всех, кроме сетей Docker, иначе это открытый прокси для всего интернета.
+- Прокси к Telegram (`TELEGRAM_PROXY_URL`) - только для Bot API: TLS идёт насквозь, прокси видит лишь адрес `api.telegram.org`. Inbound прокси слушает только адрес моста Docker (`172.17.0.1`), а не `0.0.0.0`, иначе это открытый прокси для всего интернета.
 
 ## От чего это защищает, а от чего нет
 
