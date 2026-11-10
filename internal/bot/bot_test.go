@@ -156,12 +156,15 @@ func TestPreviewInputAndRender(t *testing.T) {
 	}
 
 	text := renderPreview(in)
+	if n := strings.Count(text, "сегодня"); n != 1 {
+		t.Errorf("today is marked %d times:\n%s", n, text)
+	}
 	for _, want := range []string{
 		`Неделя 19.10-23.10.2026</b> · <a href="https://t.me/c/1234567890/1">пост</a>`,
 		"Пн 19.10 - 8ч ✅",
 		"Вт 20.10 - 8ч",
 		"ABC-1 6ч, ABC-2 2ч",
-		"Пт 23.10 - <i>(сокращённый)</i>",
+		"Пт 23.10 - <i>(сокращённый)</i> · сегодня",
 		"<b>Итого: 16ч</b> из 39ч по норме (не хватает 23ч)",
 		"К записи в Jira: 2",
 	} {

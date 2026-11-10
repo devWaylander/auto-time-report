@@ -141,6 +141,7 @@ type previewInput struct {
 	Unapproved   int
 	CalendarDown bool
 	PostURL      string // ссылка на пост недели в канале; пусто - без ссылки
+	Today        time.Time
 }
 
 func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
@@ -148,7 +149,7 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 	from, to := weekStart(dates[0]), weekStart(dates[len(dates)-1]).AddDate(0, 0, 6)
 	today := b.today()
 
-	var in previewInput
+	in := previewInput{Today: today}
 	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
 		kind, err := b.cal.Day(ctx, d)
 		if err != nil {
@@ -215,6 +216,9 @@ func renderPreview(in previewInput) string {
 		total := "-"
 		if d.Total > 0 {
 			total = "- " + parser.FormatDuration(d.Total)
+		}
+		if d.Date.Equal(in.Today) {
+			mark += " · сегодня"
 		}
 		fmt.Fprintf(&b, "%s %s %s%s%s\n", weekdays[d.Date.Weekday()], d.Date.Format("02.01"), total, note, mark)
 		if len(d.Issues) > 0 {
