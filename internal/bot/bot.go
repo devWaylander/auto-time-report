@@ -443,6 +443,17 @@ func (b *Bot) onCallback(ctx context.Context, cq *models.CallbackQuery) {
 		b.onSubmitButton(ctx, cq, messageID)
 	case strings.HasPrefix(cq.Data, settingsPrefix):
 		b.onSettingsButton(ctx, cq, messageID)
+	case cq.Data == viewStatus || cq.Data == viewSubmit:
+		b.answer(ctx, cq, "Обновлено", false)
+		text, markup := b.buildPreview(ctx, cq.Data == viewSubmit)
+		if messageID == 0 {
+			b.sendPreview(ctx, cq.Data == viewSubmit)
+			return
+		}
+		b.edit(ctx, messageID, text, markup)
+	case cq.Data == viewNew:
+		b.answer(ctx, cq, "", false)
+		b.sendPreview(ctx, false)
 	case cq.Data == hideData:
 		b.answer(ctx, cq, "", false)
 		if messageID != 0 {

@@ -260,6 +260,9 @@ func TestPassphraseStartingWithSlash(t *testing.T) {
 	if !deleted[fmt.Sprint(msg.ID)] || !deleted["7"] {
 		t.Fatalf("passphrase or prompt not deleted: %v", deleted)
 	}
+	if !strings.Contains(lastParam(calls, "sendMessage", "reply_markup"), viewNew) {
+		t.Error("outcome has no status button")
+	}
 	for _, text := range tg.sent(calls) {
 		if strings.Contains(text, "Str0ng") {
 			t.Fatalf("passphrase echoed back: %q", text)
@@ -406,4 +409,47 @@ func TestCommandMenu(t *testing.T) {
 			t.Errorf("/%s is deleted as unknown", c.Command)
 		}
 	}
+}
+
+// /status -> "К отправке" перерисовывает то же сообщение с кнопками записи, "Статус" присылает новое
+func TestPreviewButtons(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	ctx := context.Background()
+	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8 часов", day(10, 19)), false)
+	tg.take()
+
+	b.onMessage(ctx, dm("/status"))
+	calls := tg.take()
+	if countMethod(calls, "sendMessage") != 1 || !strings.Contains(lastParam(calls, "sendMessage", "reply_markup"), viewSubmit) {
+		t.Fatalf("/status has no way to submit: %+v", calls)
+	}
+
+	press := func(data string) []apiCall {
+		b.onCallback(ctx, &models.CallbackQuery{
+			ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: data,
+			Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: 55}},
+		})
+		return tg.take()
+	}
+
+	calls = press(viewSubmit)
+	if countMethod(calls, "sendMessage") != 0 || lastParam(calls, "editMessageText", "message_id") != "55" ||
+		!strings.Contains(lastParam(calls, "editMessageText", "reply_markup"), submitPrefix) {
+		t.Fatalf("submit view did not replace the message: %+v", calls)
+	}
+
+	calls = press(viewNew)
+	if countMethod(calls, "editMessageText") != 0 || countMethod(calls, "sendMessage") != 1 {
+		t.Fatalf("status button did not send a new preview: %+v", calls)
+	}
+}
+
+func lastParam(calls []apiCall, method, param string) string {
+	v := ""
+	for _, c := range calls {
+		if c.method == method {
+			v = c.params[param]
+		}
+	}
+	return v
 }

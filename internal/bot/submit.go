@@ -247,7 +247,9 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 	}
 	slog.Info("submit finished", "created", created, "approved", len(outcome.Approved))
 	progress("Отправка завершена, итог ниже.")
-	b.notify(dbCtx, renderOutcome(outcome, runErr))
+	if _, err := b.send(dbCtx, renderOutcome(outcome, runErr), statusButton); err != nil {
+		slog.Error("send outcome", "error", err)
+	}
 }
 
 func isAuthError(err error) bool {

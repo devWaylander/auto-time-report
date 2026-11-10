@@ -63,7 +63,7 @@ func newTestBot(t *testing.T, cal fakeCalendar) (*Bot, *store.Store) {
 }
 
 func TestSubmitDataRoundTrip(t *testing.T) {
-	markup := previewKeyboard(17, hashText("post"), 2, 0).(models.InlineKeyboardMarkup)
+	markup := previewKeyboard(true, 17, hashText("post"), 2, 0).(models.InlineKeyboardMarkup)
 	for i, approve := range []bool{false, true} {
 		data := markup.InlineKeyboard[0][i].CallbackData
 		if len(data) > 64 {
@@ -85,12 +85,33 @@ func TestSubmitDataRoundTrip(t *testing.T) {
 }
 
 func TestPreviewKeyboard(t *testing.T) {
-	if previewKeyboard(1, "h", 0, 0) != nil {
-		t.Fatal("keyboard when nothing to do")
+	data := func(m models.ReplyMarkup) [][]string {
+		var rows [][]string
+		for _, row := range m.(models.InlineKeyboardMarkup).InlineKeyboard {
+			var r []string
+			for _, btn := range row {
+				r = append(r, btn.CallbackData)
+			}
+			rows = append(rows, r)
+		}
+		return rows
 	}
-	only := previewKeyboard(1, "h", 0, 1).(models.InlineKeyboardMarkup)
-	if len(only.InlineKeyboard[0]) != 1 || !strings.HasSuffix(only.InlineKeyboard[0][0].CallbackData, ":1") {
-		t.Fatalf("approve-only keyboard = %+v", only)
+	for _, tc := range []struct {
+		name                string
+		submit              bool
+		pending, unapproved int
+		want                string
+	}{
+		{"status, nothing to do", false, 0, 0, "[[v:status]]"},
+		{"status, something to send", false, 2, 0, "[[v:status v:submit]]"},
+		{"status, only approval", false, 0, 1, "[[v:status v:submit]]"},
+		{"submit, nothing to do", true, 0, 0, "[[v:submit x]]"},
+		{"submit, only approval", true, 0, 1, "[[s:1:h:1] [v:submit x]]"},
+		{"submit, worklogs", true, 2, 0, "[[s:1:h:0 s:1:h:1] [v:submit x]]"},
+	} {
+		if got := fmt.Sprint(data(previewKeyboard(tc.submit, 1, "h", tc.pending, tc.unapproved))); got != tc.want {
+			t.Errorf("%s: keyboard = %s, want %s", tc.name, got, tc.want)
+		}
 	}
 }
 

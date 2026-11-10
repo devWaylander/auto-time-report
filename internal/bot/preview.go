@@ -22,6 +22,10 @@ import (
 const (
 	submitPrefix = "s:"
 	hideData     = "x"
+	// Превью по кнопке: viewStatus и viewSubmit перерисовывают это же сообщение, viewNew присылает новое
+	viewStatus = "v:status"
+	viewSubmit = "v:submit"
+	viewNew    = "v:new"
 )
 
 // weekState - пост недели вместе с тем, что из него уже записано в Jira
@@ -87,32 +91,30 @@ func (b *Bot) loadWeek(ctx context.Context) (weekState, error) {
 	return w, nil
 }
 
-// sendPreview присылает превью недели; withButtons - с кнопками отправки
-func (b *Bot) sendPreview(ctx context.Context, withButtons bool) {
-	text, markup := b.buildPreview(ctx, withButtons)
+// sendPreview присылает превью недели; submit - с кнопками отправки
+func (b *Bot) sendPreview(ctx context.Context, submit bool) {
+	text, markup := b.buildPreview(ctx, submit)
 	if _, err := b.send(ctx, text, markup); err != nil {
 		slog.Error("send preview", "error", err)
 	}
 }
 
-func (b *Bot) buildPreview(ctx context.Context, withButtons bool) (string, models.ReplyMarkup) {
+func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.ReplyMarkup) {
+	// Даже без превью оставляем "Обновить": поправил пост - нажал, не набирая команду заново
+	refreshOnly := previewKeyboard(submit, 0, "", 0, 0)
 	w, err := b.loadWeek(ctx)
 	switch {
 	case errors.Is(err, errNoPost):
-		return "Поста недели пока нет. Напиши его в канал: первая строка - дата, например 19.10", nil
+		return "Поста недели пока нет. Напиши его в канал: первая строка - дата, например 19.10", refreshOnly
 	case err != nil && w.post.ID != 0:
-		return "⚠️ В посте недели ошибки, превью не собрать:\n" + formatParseErrors(err), nil
+		return "⚠️ В посте недели ошибки, превью не собрать:\n" + formatParseErrors(err), refreshOnly
 	case err != nil:
 		slog.Error("load week", "error", err)
-		return "⚠️ Не смог собрать превью, загляни в логи бота.", nil
+		return "⚠️ Не смог собрать превью, загляни в логи бота.", refreshOnly
 	}
 
 	in := b.previewInput(ctx, w)
-	text := renderPreview(in)
-	if !withButtons {
-		return text, nil
-	}
-	return text, previewKeyboard(w.post.ID, hashText(w.post.Text), in.Pending, len(w.unapproved))
+	return renderPreview(in), previewKeyboard(submit, w.post.ID, hashText(w.post.Text), in.Pending, len(w.unapproved))
 }
 
 // dayLine - строка превью за один день
@@ -240,7 +242,22 @@ func renderPreview(in previewInput) string {
 	return b.String()
 }
 
-func previewKeyboard(postID int64, hash string, pending, unapproved int) models.ReplyMarkup {
+// previewKeyboard - кнопки под превью. В режиме отправки - кнопки записи, если есть что записывать,
+// в режиме статуса - переход к отправке. Внизу всегда "Обновить"
+func previewKeyboard(submit bool, postID int64, hash string, pending, unapproved int) models.ReplyMarkup {
+	refresh := models.InlineKeyboardButton{Text: "🔄 Обновить", CallbackData: viewStatus}
+	if submit {
+		refresh.CallbackData = viewSubmit
+	}
+	nav := []models.InlineKeyboardButton{refresh}
+	if !submit {
+		if pending > 0 || unapproved > 0 {
+			nav = append(nav, models.InlineKeyboardButton{Text: "📨 К отправке", CallbackData: viewSubmit})
+		}
+		return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{nav}}
+	}
+	nav = append(nav, models.InlineKeyboardButton{Text: "✖️ Скрыть", CallbackData: hideData})
+
 	data := func(approve bool) string {
 		a := "0"
 		if approve {
@@ -258,13 +275,15 @@ func previewKeyboard(postID int64, hash string, pending, unapproved int) models.
 	case unapproved > 0:
 		row = append(row, models.InlineKeyboardButton{Text: "📨 Отправить на проверку", CallbackData: data(true)})
 	default:
-		return nil
+		return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{nav}}
 	}
-	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-		row,
-		{{Text: "✖️ Скрыть", CallbackData: hideData}},
-	}}
+	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row, nav}}
 }
+
+// statusButton - "Статус" под напоминаниями и итогом отправки: присылает свежее превью отдельным сообщением
+var statusButton = models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+	{{Text: "📊 Статус", CallbackData: viewNew}},
+}}
 
 // hashText - короткий отпечаток текста поста: кнопка превью сработает, только если пост с тех пор не менялся
 func hashText(s string) string {
@@ -280,7 +299,7 @@ func weekStart(d time.Time) time.Time {
 // DailyReminder - напоминание notify: за сегодня в посте нет записей
 func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
 	_, err := b.send(ctx, fmt.Sprintf("📝 За сегодня (%s %s) в посте недели нет записей. Не забудь дописать.",
-		strings.ToLower(weekdays[date.Weekday()]), date.Format("02.01")), nil)
+		strings.ToLower(weekdays[date.Weekday()]), date.Format("02.01")), statusButton)
 	return err
 }
 
