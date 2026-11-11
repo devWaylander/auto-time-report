@@ -309,32 +309,33 @@ var durationRe = regexp.MustCompile(`^(?:([0-9]+)ч)?\s*(?:([0-9]+)м)?$`)
 // Потолок одной записи: защищает и от опечаток, и от переполнения
 const maxEntryMinutes = 24 * 60
 
-const durationHint = `нужно "… - 8ч", "… - 30м" или "… - 8ч 30м"`
+// Одна понятная ошибка на любой неверный формат времени
+var errDurationFormat = errors.New("в конце нужно время: XXч XXм / XXч / XXм")
 
 // parseDuration берёт время из конца строки: запись имеет вид "<описание> - <время>". Всё до последнего
 // " - " - описание, в нём могут быть любые числа, версии и ключи задач
 func parseDuration(line string) (time.Duration, error) {
 	i := strings.LastIndex(line, " - ")
 	if i < 0 || strings.TrimSpace(line[:i]) == "" {
-		return 0, errors.New("нет времени в конце строки: " + durationHint)
+		return 0, errDurationFormat
 	}
 	tail := strings.TrimSpace(line[i+len(" - "):])
 	m := durationRe.FindStringSubmatch(strings.ToLower(tail))
 	if tail == "" || m == nil {
-		return 0, fmt.Errorf("%q - не время: %s", tail, durationHint)
+		return 0, errDurationFormat
 	}
 
 	hours, _ := strconv.Atoi(m[1])
 	minutes, _ := strconv.Atoi(m[2])
 	if m[1] != "" && minutes > 59 {
-		return 0, errors.New("при часах минут должно быть меньше 60: " + durationHint)
+		return 0, errors.New("минут должно быть меньше 60")
 	}
 	total := hours*60 + minutes
 	switch {
 	case len(m[1]) > 4 || len(m[2]) > 4 || total > maxEntryMinutes:
 		return 0, errors.New("в одной записи больше суток")
 	case total == 0:
-		return 0, errors.New("длительность должна быть больше нуля")
+		return 0, errors.New("время должно быть больше нуля")
 	}
 	return time.Duration(total) * time.Minute, nil
 }
