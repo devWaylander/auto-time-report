@@ -79,7 +79,7 @@ func renderSettings(st store.Settings, vacations []store.Vacation, now time.Time
 	for _, v := range vacations {
 		fmt.Fprintf(&b, "🏖 Отпуск %s-%s\n", v.Start.Format("02.01"), v.End.Format("02.01.2006"))
 	}
-	b.WriteString("\nВыходные и праздники по производственному календарю пропускаются сами.\n" +
+	b.WriteString("\nВыходные и праздники по производственному календарю пропускаются сами\n" +
 		"Время: /daily 19:30, /weekly пт 16:00. Отпуск: /vacation 27.10-31.10, /vacation off")
 	return b.String()
 }
@@ -159,7 +159,7 @@ func (b *Bot) cmdDaily(ctx context.Context, args string) {
 		b.notify(ctx, "⚠️ Настройки не сохранены")
 		return
 	}
-	b.notify(ctx, "🔔 Ежедневное напоминание в "+args+" по рабочим дням, если за день нет записей.")
+	b.notify(ctx, "🔔 Ежедневное напоминание в "+args+" по рабочим дням, если за день нет записей")
 }
 
 func (b *Bot) cmdWeekly(ctx context.Context, args string) {
@@ -188,7 +188,7 @@ func (b *Bot) cmdVacation(ctx context.Context, args string) {
 			b.notify(ctx, "⚠️ Отпуск не отменён")
 			return
 		}
-		b.notify(ctx, "🏖 Текущие и будущие отпуска отменены, напоминания снова идут.")
+		b.notify(ctx, "🏖 Текущие и будущие отпуска отменены, напоминания снова идут")
 		return
 	}
 
@@ -202,7 +202,7 @@ func (b *Bot) cmdVacation(ctx context.Context, args string) {
 		b.notify(ctx, "⚠️ Отпуск не сохранён")
 		return
 	}
-	b.notify(ctx, fmt.Sprintf("🏖 Отпуск %s-%s: напоминаний не будет.", start.Format("02.01.2006"), end.Format("02.01.2006")))
+	b.notify(ctx, fmt.Sprintf("🏖 Отпуск %s-%s: напоминаний не будет", start.Format("02.01.2006"), end.Format("02.01.2006")))
 }
 
 // parseVacation разбирает "ДД.ММ-ДД.ММ". Год - ближайший, при котором отпуск ещё не закончился:

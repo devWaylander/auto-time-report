@@ -160,7 +160,7 @@ func (b *Bot) cancelPending(ctx context.Context) {
 	b.pending = nil
 	b.mu.Unlock()
 	if p == nil {
-		b.notify(ctx, "Нечего отменять.")
+		b.notify(ctx, "Нечего отменять")
 		return
 	}
 	if err := b.deleteMessage(ctx, b.cfg.OwnerID, p.promptID); err != nil {
@@ -210,7 +210,7 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 		})
 	}
 	if len(job.Worklogs) == 0 && (!p.approve || len(job.KnownPeriods) == 0) {
-		progress("Нечего отправлять: всё уже в Jira.")
+		progress("Нечего отправлять: всё уже в Jira")
 		return
 	}
 
@@ -257,7 +257,7 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 		}
 	}
 	slog.Info("submit finished", "created", created, "approved", len(outcome.Approved))
-	progress("Отправка завершена, итог ниже.")
+	progress("Отправка завершена, итог ниже")
 	if _, err := b.send(dbCtx, renderOutcome(outcome, runErr), statusButton); err != nil {
 		slog.Error("send outcome", "error", err)
 	}
@@ -306,9 +306,9 @@ func renderOutcome(o corp.Outcome, runErr error) string {
 func describeError(err error) string {
 	switch {
 	case errors.Is(err, corp.ErrBadPassphrase):
-		return "пароль-фраза не подошла."
+		return "пароль-фраза не подошла"
 	case isAuthError(err):
-		return "доступ не принят (" + html.EscapeString(err.Error()) + ").\n" +
+		return "доступ не принят (" + html.EscapeString(err.Error()) + ")\n" +
 			"🔒 Отправка заблокирована, чтобы не словить капчу или блокировку учётки. Снять блокировку после проверки доступов /unlock"
 	case errors.Is(err, jira.ErrUnknownResult):
 		return "нестандартный ответ от Jira, worklog мог записаться - нужна сверка с календарём"
@@ -327,7 +327,7 @@ func (b *Bot) cmdUnlock(ctx context.Context) {
 	b.locked = false
 	b.mu.Unlock()
 	if !was {
-		b.notify(ctx, "Блокировки нет.")
+		b.notify(ctx, "Блокировки нет")
 		return
 	}
 	b.notify(ctx, "🔓 Блокировка снята. При новой ошибке доступа отправка снова заблокируется")

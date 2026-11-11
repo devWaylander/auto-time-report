@@ -96,7 +96,7 @@ func (r *Runner) Run(ctx context.Context, passphrase []byte, job Job, hooks Hook
 	defer cancel()
 
 	if creds.VPN != nil {
-		hooks.Progress("🔐 Подключение VPN. Направлен ОДИН пуш Multifactor.\n" +
+		hooks.Progress("🔐 Подключение VPN. Направлен ОДИН пуш Multifactor\n" +
 			"Второй пуш или пуш без нажатия кнопки необходимо отклонить")
 		sess, err := r.tunnel.Up(ctx, *creds.VPN)
 		if err != nil {

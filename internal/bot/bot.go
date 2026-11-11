@@ -166,7 +166,7 @@ func (b *Bot) onError(err error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	b.notify(ctx, "🚨 Токеном бота пользуется ещё кто-то (Telegram вернул 409 Conflict).\n"+
+	b.notify(ctx, "🚨 Токеном бота пользуется ещё кто-то (Telegram вернул 409 Conflict)\n"+
 		"Если это не второй запуск бота - токен перевыпустить в @BotFather, пароль-фразу до выяснения не отправлять")
 }
 
