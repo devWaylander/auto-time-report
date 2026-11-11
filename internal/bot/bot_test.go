@@ -63,7 +63,7 @@ func newTestBot(t *testing.T, cal fakeCalendar) (*Bot, *store.Store) {
 }
 
 func TestSubmitDataRoundTrip(t *testing.T) {
-	markup := previewKeyboard(true, 17, hashText("post"), 2, 0).(models.InlineKeyboardMarkup)
+	markup := previewKeyboard(true, 17, hashText("post"), 2, 0, true).(models.InlineKeyboardMarkup)
 	for i, approve := range []bool{false, true} {
 		data := markup.InlineKeyboard[0][i].CallbackData
 		if len(data) > 64 {
@@ -100,16 +100,21 @@ func TestPreviewKeyboard(t *testing.T) {
 		name                string
 		submit              bool
 		pending, unapproved int
+		filled              bool
 		want                string
 	}{
-		{"status, nothing to do", false, 0, 0, "[[v:status]]"},
-		{"status, something to send", false, 2, 0, "[[v:status v:submit]]"},
-		{"status, only approval", false, 0, 1, "[[v:status v:submit]]"},
-		{"submit, nothing to do", true, 0, 0, "[[v:submit x]]"},
-		{"submit, only approval", true, 0, 1, "[[s:1:h:1] [v:submit x]]"},
-		{"submit, worklogs", true, 2, 0, "[[s:1:h:0 s:1:h:1] [v:submit x]]"},
+		{"status, nothing to do", false, 0, 0, true, "[[v:status]]"},
+		{"status, something to send", false, 2, 0, true, "[[v:status v:submit]]"},
+		{"status, something to send, week not filled", false, 2, 0, false, "[[v:status v:submit]]"},
+		{"status, only approval", false, 0, 1, true, "[[v:status v:submit]]"},
+		{"status, only approval, week not filled", false, 0, 1, false, "[[v:status]]"},
+		{"submit, nothing to do", true, 0, 0, true, "[[v:submit x]]"},
+		{"submit, only approval", true, 0, 1, true, "[[s:1:h:1] [v:submit x]]"},
+		{"submit, only approval, week not filled", true, 0, 1, false, "[[v:submit x]]"},
+		{"submit, worklogs", true, 2, 0, true, "[[s:1:h:0 s:1:h:1] [v:submit x]]"},
+		{"submit, worklogs, week not filled", true, 2, 1, false, "[[s:1:h:0] [v:submit x]]"},
 	} {
-		if got := fmt.Sprint(data(previewKeyboard(tc.submit, 1, "h", tc.pending, tc.unapproved))); got != tc.want {
+		if got := fmt.Sprint(data(previewKeyboard(tc.submit, 1, "h", tc.pending, tc.unapproved, tc.filled))); got != tc.want {
 			t.Errorf("%s: keyboard = %s, want %s", tc.name, got, tc.want)
 		}
 	}
@@ -151,8 +156,8 @@ func TestPreviewInputAndRender(t *testing.T) {
 	if len(in.Days) != 5 {
 		t.Fatalf("days = %d, want 5 working days", len(in.Days))
 	}
-	if in.Pending != 2 || in.Unapproved != 1 {
-		t.Fatalf("pending %d unapproved %d", in.Pending, in.Unapproved)
+	if in.Pending != 2 || in.Unapproved != 1 || !in.Unfilled {
+		t.Fatalf("pending %d unapproved %d unfilled %v", in.Pending, in.Unapproved, in.Unfilled)
 	}
 
 	text := renderPreview(in)
@@ -174,6 +179,53 @@ func TestPreviewInputAndRender(t *testing.T) {
 	}
 	if strings.Contains(text, "<b>важное</b>") {
 		t.Error("post text must not leak into the preview as HTML")
+	}
+}
+
+func TestPreviewApprovalWaitsForFilledWeek(t *testing.T) {
+	b, st := newTestBot(t, nil)
+	ctx := context.Background()
+
+	// Сегодня пятница 23.10: Пн-Чт записаны, пятница пустая
+	post := "19.10\nРабота - 8ч\n\n20.10\nРабота - 8ч\n\n21.10\nРабота - 8ч\n\n22.10\nРабота - 8ч\n\n23.10"
+	saved, _, err := st.SaveWeekPost(ctx, store.WeekPost{UserID: b.userID, ChatID: -100, MessageID: 1, Text: post, PostedAt: day(10, 19)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 4 {
+		if _, err := st.SaveSubmission(ctx, store.Submission{
+			UserID: b.userID, WeekPostID: saved.ID, IssueKey: "ABC-1", WorkDate: day(10, 19+i),
+			Duration: 8 * time.Hour, Comment: "x", WorklogID: int64(i + 1), PeriodID: 228,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	status, markup := b.buildPreview(ctx, false)
+	if !strings.Contains(status, "✅ В Jira есть всё из поста") || strings.Contains(status, "проверку") {
+		t.Errorf("unfilled week must not be offered for approval:\n%s", status)
+	}
+	if got := len(markup.(models.InlineKeyboardMarkup).InlineKeyboard[0]); got != 1 {
+		t.Errorf("status keyboard has %d buttons, want only refresh", got)
+	}
+	submit, markup := b.buildPreview(ctx, true)
+	if !strings.Contains(submit, "На проверку после заполнения рабочих дней") {
+		t.Errorf("submit preview does not explain the missing approval:\n%s", submit)
+	}
+	if rows := markup.(models.InlineKeyboardMarkup).InlineKeyboard; len(rows) != 1 {
+		t.Errorf("submit keyboard = %v, want only refresh and hide", rows)
+	}
+
+	// Пятница в отпуске - неделя заполнена
+	if _, err := st.AddVacation(ctx, b.userID, day(10, 23), day(10, 23)); err != nil {
+		t.Fatal(err)
+	}
+	status, markup = b.buildPreview(ctx, false)
+	if !strings.Contains(status, "Неделя заполнена, можно отправить на проверку") || strings.Contains(status, "Нет записей") {
+		t.Errorf("vacation day must count as filled:\n%s", status)
+	}
+	if got := len(markup.(models.InlineKeyboardMarkup).InlineKeyboard[0]); got != 2 {
+		t.Errorf("status keyboard has %d buttons, want refresh and submit", got)
 	}
 }
 

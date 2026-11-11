@@ -103,7 +103,7 @@ func (b *Bot) sendPreview(ctx context.Context, submit bool) {
 
 func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.ReplyMarkup) {
 	// Даже без превью оставляем "Обновить": поправил пост - нажал, не набирая команду заново
-	refreshOnly := previewKeyboard(submit, 0, "", 0, 0)
+	refreshOnly := previewKeyboard(submit, 0, "", 0, 0, false)
 	w, err := b.loadWeek(ctx)
 	switch {
 	case errors.Is(err, errNoPost):
@@ -120,7 +120,8 @@ func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.Rep
 	}
 
 	in := b.previewInput(ctx, w)
-	return renderPreview(in), previewKeyboard(submit, w.post.ID, hashText(w.post.Text), in.Pending, len(w.unapproved))
+	in.Submit = submit
+	return renderPreview(in), previewKeyboard(submit, w.post.ID, hashText(w.post.Text), in.Pending, in.Unapproved, !in.Unfilled)
 }
 
 // dayLine - строка превью за один день
@@ -139,11 +140,13 @@ type previewInput struct {
 	Total        time.Duration
 	Norm         time.Duration
 	Missing      []time.Time
+	Unfilled     bool // есть рабочие дни без записей, в том числе будущие: на проверку рано
 	Pending      int
 	Unapproved   int
 	CalendarDown bool
 	PostURL      string // ссылка на пост недели в канале; пусто - без ссылки
 	Today        time.Time
+	Submit       bool // превью с кнопками отправки
 }
 
 func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
@@ -178,8 +181,11 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 
 		in.Norm += kind.Norm()
 		in.Total += line.Total
-		if kind != calendar.Off && line.Total == 0 && !d.After(today) {
-			in.Missing = append(in.Missing, d)
+		if kind != calendar.Off && line.Total == 0 && !b.onVacation(ctx, d) {
+			in.Unfilled = true
+			if !d.After(today) {
+				in.Missing = append(in.Missing, d)
+			}
 		}
 		if kind != calendar.Off || line.Total > 0 {
 			in.Days = append(in.Days, line)
@@ -189,6 +195,15 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 	in.Pending = len(w.pendingWorklogs())
 	in.Unapproved = len(w.unapproved)
 	return in
+}
+
+// onVacation - день в отпуске из /vacation. Ошибка базы не мешает превью: день считается рабочим
+func (b *Bot) onVacation(ctx context.Context, d time.Time) bool {
+	ok, err := b.store.OnVacation(ctx, b.userID, d)
+	if err != nil {
+		slog.Error("check vacation", "error", err)
+	}
+	return ok
 }
 
 var weekdays = [...]string{"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"}
@@ -257,24 +272,30 @@ func renderPreview(in previewInput) string {
 	switch {
 	case in.Pending > 0:
 		fmt.Fprintf(&b, "\nК записи в Jira: %d", in.Pending)
+	case in.Unfilled:
+		b.WriteString("\n✅ В Jira есть всё из поста")
 	case in.Unapproved > 0:
-		b.WriteString("\nВсё записано, можно отправить на проверку")
+		b.WriteString("\nНеделя заполнена, можно отправить на проверку")
 	default:
 		b.WriteString("\n✅ Всё записано и отправлено на проверку")
+	}
+	if in.Submit && in.Unfilled && (in.Pending > 0 || in.Unapproved > 0) {
+		b.WriteString("\nНа проверку после заполнения рабочих дней")
 	}
 	return b.String()
 }
 
 // previewKeyboard - кнопки под превью. В режиме отправки - кнопки записи, если есть что записывать,
-// в режиме статуса - переход к отправке. Внизу всегда "Обновить"
-func previewKeyboard(submit bool, postID int64, hash string, pending, unapproved int) models.ReplyMarkup {
+// в режиме статуса - переход к отправке. На проверку - только когда заполнены все рабочие дни (filled).
+// Внизу всегда "Обновить"
+func previewKeyboard(submit bool, postID int64, hash string, pending, unapproved int, filled bool) models.ReplyMarkup {
 	refresh := models.InlineKeyboardButton{Text: "🔄 Обновить", CallbackData: viewStatus}
 	if submit {
 		refresh.CallbackData = viewSubmit
 	}
 	nav := []models.InlineKeyboardButton{refresh}
 	if !submit {
-		if pending > 0 || unapproved > 0 {
+		if pending > 0 || unapproved > 0 && filled {
 			nav = append(nav, models.InlineKeyboardButton{Text: "📨 К отправке", CallbackData: viewSubmit})
 		}
 		return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{nav}}
@@ -291,11 +312,11 @@ func previewKeyboard(submit bool, postID int64, hash string, pending, unapproved
 	var row []models.InlineKeyboardButton
 	switch {
 	case pending > 0:
-		row = append(row,
-			models.InlineKeyboardButton{Text: "✍️ Записать", CallbackData: data(false)},
-			models.InlineKeyboardButton{Text: "📨 Записать и на проверку", CallbackData: data(true)},
-		)
-	case unapproved > 0:
+		row = append(row, models.InlineKeyboardButton{Text: "✍️ Записать", CallbackData: data(false)})
+		if filled {
+			row = append(row, models.InlineKeyboardButton{Text: "📨 Записать и на проверку", CallbackData: data(true)})
+		}
+	case unapproved > 0 && filled:
 		row = append(row, models.InlineKeyboardButton{Text: "📨 Отправить на проверку", CallbackData: data(true)})
 	default:
 		return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{nav}}
