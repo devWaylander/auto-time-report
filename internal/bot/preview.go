@@ -129,6 +129,15 @@ type dayLine struct {
 	Submitted int      // сколько worklog'ов дня уже в Jira
 	Manual    int      // из них найдено в Jira, но поставлено не ботом
 	Worklogs  int
+	Vacation  bool // рабочий день в отпуске из /vacation
+}
+
+// shortfall - сколько не хватает до нормы дня; ноль - день пустой, в отпуске или норма набрана
+func (d dayLine) shortfall() time.Duration {
+	if d.Total == 0 || d.Vacation || d.Total >= d.Kind.Norm() {
+		return 0
+	}
+	return d.Kind.Norm() - d.Total
 }
 
 type previewInput struct {
@@ -156,7 +165,7 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 		if err != nil {
 			in.CalendarDown = true
 		}
-		line := dayLine{Date: d, Kind: kind}
+		line := dayLine{Date: d, Kind: kind, Vacation: kind != calendar.Off && b.onVacation(ctx, d)}
 		for _, wl := range w.report.Worklogs {
 			if !sameDay(wl.Date, d) {
 				continue
@@ -177,7 +186,7 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 
 		in.Norm += kind.Norm()
 		in.Total += line.Total
-		if kind != calendar.Off && line.Total == 0 && !b.onVacation(ctx, d) {
+		if kind != calendar.Off && line.Total == 0 && !line.Vacation {
 			in.Unfilled = true
 			if !d.After(today) {
 				in.Missing = append(in.Missing, d)
@@ -233,6 +242,9 @@ func renderPreview(in previewInput) string {
 		if d.Total > 0 {
 			total = "- " + parser.FormatDuration(d.Total)
 		}
+		if d.shortfall() > 0 {
+			total += " ⚠️ из " + parser.FormatDuration(d.Kind.Norm())
+		}
 		if d.Manual > 0 {
 			mark += " вручную"
 		}
@@ -260,6 +272,15 @@ func renderPreview(in previewInput) string {
 			days[i] = d.Format("02.01")
 		}
 		fmt.Fprintf(&b, "⚠️ Нет записей за рабочие дни: %s\n", strings.Join(days, ", "))
+	}
+	var short []string
+	for _, d := range in.Days {
+		if s := d.shortfall(); s > 0 {
+			short = append(short, fmt.Sprintf("%s (%s)", d.Date.Format("02.01"), parser.FormatDuration(s)))
+		}
+	}
+	if len(short) > 0 {
+		fmt.Fprintf(&b, "⚠️ Недобор: %s\n", strings.Join(short, ", "))
 	}
 	if in.CalendarDown {
 		b.WriteString("⚠️ Производственный календарь недоступен, норма посчитана по пятидневке\n")

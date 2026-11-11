@@ -229,6 +229,31 @@ func TestPreviewApprovalWaitsForFilledWeek(t *testing.T) {
 	}
 }
 
+func TestRenderShortfall(t *testing.T) {
+	text := renderPreview(previewInput{
+		Days: []dayLine{
+			{Date: day(10, 19), Kind: calendar.Working, Total: 8 * time.Hour, Worklogs: 1},
+			{Date: day(10, 20), Kind: calendar.Working, Total: 6 * time.Hour, Worklogs: 1},
+			{Date: day(10, 21), Kind: calendar.Working, Total: 2 * time.Hour, Worklogs: 1, Vacation: true},
+			{Date: day(10, 23), Kind: calendar.Short, Total: 6*time.Hour + 30*time.Minute, Worklogs: 1},
+			{Date: day(10, 24), Kind: calendar.Off, Total: 2 * time.Hour, Worklogs: 1},
+		},
+		Pending: 1,
+	})
+	for _, want := range []string{
+		"Пн 19.10 - 8ч\n",
+		"Вт 20.10 - 6ч ⚠️ из 8ч\n",
+		"Ср 21.10 - 2ч\n",
+		"Пт 23.10 - 6ч 30м ⚠️ из 7ч <i>(сокращённый)</i>",
+		"Сб 24.10 - 2ч <i>(выходной)</i>",
+		"⚠️ Недобор: 20.10 (2ч), 23.10 (30м)\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("preview has no %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestChangedSubmitted(t *testing.T) {
 	b, st := newTestBot(t, nil)
 	ctx := context.Background()
