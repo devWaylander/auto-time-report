@@ -237,7 +237,7 @@ func parseDayMonth(s string, year int, loc *time.Location) (time.Time, error) {
 	day, err1 := strconv.Atoi(d)
 	month, err2 := strconv.Atoi(m)
 	if !ok || err1 != nil || err2 != nil {
-		return time.Time{}, fmt.Errorf("непонятная дата %q", s)
+		return time.Time{}, fmt.Errorf("неизвестный формат даты %q", s)
 	}
 	t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc)
 	if t.Day() != day || int(t.Month()) != month {

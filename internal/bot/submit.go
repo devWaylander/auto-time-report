@@ -144,7 +144,7 @@ func (b *Bot) takePassphrase(ctx context.Context, msg *models.Message) bool {
 	switch {
 	case expired:
 		clear(passphrase)
-		b.notify(ctx, "⌛ Время на пароль-фразу вышло, нужна повторная отправка")
+		b.notify(ctx, "⌛ Время на пароль-фразу истекло, нужна повторная отправка")
 	case refusal != "":
 		clear(passphrase)
 		b.notify(ctx, refusal)

@@ -209,7 +209,7 @@ func TestPreviewApprovalWaitsForFilledWeek(t *testing.T) {
 		t.Errorf("status keyboard has %d buttons, want only refresh", got)
 	}
 	submit, markup := b.buildPreview(ctx, true)
-	if !strings.Contains(submit, "На проверку после заполнения рабочих дней") {
+	if !strings.Contains(submit, "На проверку после заполнения всех рабочих дней") {
 		t.Errorf("submit preview does not explain the missing approval:\n%s", submit)
 	}
 	if rows := markup.(models.InlineKeyboardMarkup).InlineKeyboard; len(rows) != 1 {

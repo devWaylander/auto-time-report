@@ -280,7 +280,7 @@ func renderPreview(in previewInput) string {
 		b.WriteString("\n✅ Всё записано и отправлено на проверку")
 	}
 	if in.Submit && in.Unfilled && (in.Pending > 0 || in.Unapproved > 0) {
-		b.WriteString("\nНа проверку после заполнения рабочих дней")
+		b.WriteString("\nНа проверку после заполнения всех рабочих дней")
 	}
 	return b.String()
 }
