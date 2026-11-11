@@ -309,19 +309,26 @@ var durationRe = regexp.MustCompile(`^(?:([0-9]+)ч)?\s*(?:([0-9]+)м)?$`)
 // Потолок одной записи: защищает и от опечаток, и от переполнения
 const maxEntryMinutes = 24 * 60
 
-// Одна понятная ошибка на любой неверный формат времени
-var errDurationFormat = errors.New("в конце нужно время: XXч XXм / XXч / XXм")
+var (
+	// В строке нет " - <время>"
+	errNoDuration = errors.New(`не найдено время, ожидаю в формате: "XXч XXм", "XXч", "XXм"`)
+	// После последнего " - " стоит не время
+	errDurationFormat = errors.New(`ожидаю формат времени: "XXч XXм", "XXч", "XXм"`)
+)
 
 // parseDuration берёт время из конца строки: запись имеет вид "<описание> - <время>". Всё до последнего
 // " - " - описание, в нём могут быть любые числа, версии и ключи задач
 func parseDuration(line string) (time.Duration, error) {
 	i := strings.LastIndex(line, " - ")
 	if i < 0 || strings.TrimSpace(line[:i]) == "" {
-		return 0, errDurationFormat
+		return 0, errNoDuration
 	}
 	tail := strings.TrimSpace(line[i+len(" - "):])
+	if tail == "" {
+		return 0, errNoDuration
+	}
 	m := durationRe.FindStringSubmatch(strings.ToLower(tail))
-	if tail == "" || m == nil {
+	if m == nil {
 		return 0, errDurationFormat
 	}
 
