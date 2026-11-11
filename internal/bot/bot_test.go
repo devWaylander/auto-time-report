@@ -120,7 +120,7 @@ func TestPreviewInputAndRender(t *testing.T) {
 	ctx := context.Background()
 
 	// Понедельник и вторник, во вторник две задачи; понедельник уже записан
-	post := "19.10\nРабота - 8 часов\n\n20.10\nДело <b>важное</b> - 6 часов\n\nABC-2\n20.10\nСозвон - 2 часа"
+	post := "19.10\nРабота - 8ч\n\n20.10\nДело <b>важное</b> - 6ч\n\nABC-2\n20.10\nСозвон - 2ч"
 	saved, _, err := st.SaveWeekPost(ctx, store.WeekPost{UserID: b.userID, ChatID: -1001234567890, MessageID: 1, Text: post, PostedAt: day(10, 19)})
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +189,7 @@ func TestChangedSubmitted(t *testing.T) {
 		}
 	}
 
-	report, err := parseAt("19.10\nРабота - 7 часов\n\n21.10\nРабота - 8 часов", time.Date(2026, 10, 21, 12, 0, 0, 0, tz))
+	report, err := parseAt("19.10\nРабота - 7ч\n\n21.10\nРабота - 8ч", time.Date(2026, 10, 21, 12, 0, 0, 0, tz))
 	if err != nil {
 		t.Fatal(err)
 	}

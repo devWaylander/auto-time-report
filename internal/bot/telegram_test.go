@@ -164,7 +164,7 @@ func TestChannelNotesDoNotReplaceWeekPost(t *testing.T) {
 	ctx := context.Background()
 	monday := day(10, 19)
 
-	week := channelPost("19.10\nРабота - 8 часов", monday)
+	week := channelPost("19.10\nРабота - 8ч", monday)
 	b.onChannelPost(ctx, week, false)
 	if latestText(t, b) != week.Text {
 		t.Fatal("week post not accepted")
@@ -173,7 +173,7 @@ func TestChannelNotesDoNotReplaceWeekPost(t *testing.T) {
 	// Заметки: ключ отдельной строкой, дата посреди недели, обычный текст
 	for _, note := range []string{
 		"ABC-123\nспросить у аналитика про лимиты",
-		"21.10\nСозвон с командой - 1 час",
+		"21.10\nСозвон с командой - 1ч",
 		"Купить молоко",
 	} {
 		b.onChannelPost(ctx, channelPost(note, day(10, 21)), false)
@@ -200,7 +200,7 @@ func TestNextWeekPostAndLateFix(t *testing.T) {
 	b.clock = func() time.Time { return time.Date(2026, 10, 28, 12, 0, 0, 0, tz) }
 	ctx := context.Background()
 
-	old := channelPost("19.10\nРабота - 8 часов", day(10, 19))
+	old := channelPost("19.10\nРабота - 8ч", day(10, 19))
 	b.onChannelPost(ctx, old, false)
 
 	// Новый пост с опечаткой игнорируется, после исправления становится постом недели
@@ -209,19 +209,19 @@ func TestNextWeekPostAndLateFix(t *testing.T) {
 	if latestText(t, b) != old.Text {
 		t.Fatal("broken new post was accepted")
 	}
-	fixed := edit(next, "26.10\nРабота - 8 часов", day(10, 27))
+	fixed := edit(next, "26.10\nРабота - 8ч", day(10, 27))
 	b.onChannelPost(ctx, fixed, true)
 	if latestText(t, b) != fixed.Text {
 		t.Fatalf("fixed new post not accepted, latest = %q", latestText(t, b))
 	}
 
 	// Правка поста прошлой недели сохраняется, но постом недели остаётся новый
-	b.onChannelPost(ctx, edit(old, "19.10\nРабота - 7 часов", day(10, 28)), true)
+	b.onChannelPost(ctx, edit(old, "19.10\nРабота - 7ч", day(10, 28)), true)
 	if latestText(t, b) != fixed.Text {
 		t.Fatal("edit of last week's post became the week post")
 	}
 	stored, err := b.store.WeekPostByMessage(ctx, -100, int64(old.ID))
-	if err != nil || stored.Text != "19.10\nРабота - 7 часов" {
+	if err != nil || stored.Text != "19.10\nРабота - 7ч" {
 		t.Fatalf("last week's post edit not saved: %+v %v", stored, err)
 	}
 	tg.take()
@@ -231,11 +231,11 @@ func TestStaleEditDoesNotRollBack(t *testing.T) {
 	b, _, _, _ := newTelegramBot(t)
 	ctx := context.Background()
 
-	post := channelPost("19.10\nРабота - 8 часов", day(10, 19))
+	post := channelPost("19.10\nРабота - 8ч", day(10, 19))
 	b.onChannelPost(ctx, post, false)
-	b.onChannelPost(ctx, edit(post, "19.10\nРабота - 7 часов", day(10, 21)), true)
-	b.onChannelPost(ctx, edit(post, "19.10\nРабота - 6 часов", day(10, 20)), true)
-	if got := latestText(t, b); got != "19.10\nРабота - 7 часов" {
+	b.onChannelPost(ctx, edit(post, "19.10\nРабота - 7ч", day(10, 21)), true)
+	b.onChannelPost(ctx, edit(post, "19.10\nРабота - 6ч", day(10, 20)), true)
+	if got := latestText(t, b); got != "19.10\nРабота - 7ч" {
 		t.Fatalf("stale edit rolled the post back to %q", got)
 	}
 }
@@ -244,7 +244,7 @@ func TestPassphraseStartingWithSlash(t *testing.T) {
 	b, tg, runner, st := newTelegramBot(t)
 	ctx := context.Background()
 
-	post := channelPost("19.10\nРабота - 8 часов\n\n20.10\nРабота - 8 часов", day(10, 19))
+	post := channelPost("19.10\nРабота - 8ч\n\n20.10\nРабота - 8ч", day(10, 19))
 	b.onChannelPost(ctx, post, false)
 	saved, err := st.LatestWeekPost(ctx, b.userID)
 	if err != nil {
@@ -318,7 +318,7 @@ func TestStrangersAreIgnored(t *testing.T) {
 	// Владелец пишет в группе, а не в личке
 	b.onMessage(ctx, &models.Message{ID: 2, From: &models.User{ID: 42}, Chat: models.Chat{ID: -555}, Text: "фраза"})
 	// Пост в чужом канале
-	b.onChannelPost(ctx, &models.Message{ID: 3, Chat: models.Chat{ID: -999}, Text: "19.10\nРабота - 8 часов"}, false)
+	b.onChannelPost(ctx, &models.Message{ID: 3, Chat: models.Chat{ID: -999}, Text: "19.10\nРабота - 8ч"}, false)
 
 	if calls := tg.take(); len(calls) != 0 {
 		t.Fatalf("bot reacted to strangers: %+v", calls)
@@ -423,7 +423,7 @@ func TestCommandMenu(t *testing.T) {
 func TestPreviewButtons(t *testing.T) {
 	b, tg, _, _ := newTelegramBot(t)
 	ctx := context.Background()
-	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8 часов", day(10, 19)), false)
+	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8ч", day(10, 19)), false)
 	tg.take()
 
 	b.onMessage(ctx, dm("/status"))
@@ -469,7 +469,7 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 	ctx := context.Background()
 	runner.inJira = map[string]time.Duration{"2026-10-19": 6 * time.Hour}
 
-	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8 часов\n\n20.10\nРабота - 8 часов", day(10, 19)), false)
+	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8ч\n\n20.10\nРабота - 8ч", day(10, 19)), false)
 	saved, err := st.LatestWeekPost(ctx, b.userID)
 	if err != nil {
 		t.Fatal(err)
@@ -496,7 +496,7 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 
 	// Правка поста по такому дню - то же предупреждение, что и для записей бота
 	b.onChannelPost(ctx, edit(&models.Message{ID: int(saved.MessageID), Chat: models.Chat{ID: saved.ChatID}},
-		"19.10\nРабота - 7 часов\n\n20.10\nРабота - 8 часов", day(10, 21)), true)
+		"19.10\nРабота - 7ч\n\n20.10\nРабота - 8ч", day(10, 21)), true)
 	if warn := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(warn, "в Jira вручную 6ч, в посте теперь 7ч") {
 		t.Fatalf("no warning for the manual day:\n%s", warn)
 	}

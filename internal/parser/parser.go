@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 )
 
 // Entry - одна строка записи из поста
@@ -122,8 +120,6 @@ const maxDayDuration = 24 * time.Hour
 var (
 	issueLineRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]*-[0-9]+$`)
 	dateLineRe  = regexp.MustCompile(`^([0-9]{1,2})\.([0-9]{1,2})$`)
-	// Число и слово сразу за ним: "2 часа", "30мин", "1,5 ч"
-	amountRe = regexp.MustCompile(`([0-9]+(?:[.,][0-9]+)?)\s*([\p{L}]+)`)
 )
 
 // Parse разбирает пост. defaultIssue используется, пока в посте не встретилась строка-задача.
@@ -307,81 +303,40 @@ func resolveDate(m []string, today time.Time) (time.Time, error) {
 	return best, nil
 }
 
-var (
-	hourWords   = map[string]bool{"ч": true, "час": true, "часа": true, "часов": true}
-	minuteWords = map[string]bool{"мин": true, "минута": true, "минуту": true, "минуты": true, "минут": true}
-)
+// Время записи: "8ч", "30м" или "8ч 30м", слитно с буквой и в самом конце строки после последнего " - "
+var durationRe = regexp.MustCompile(`^(?:([0-9]+)ч)?\s*(?:([0-9]+)м)?$`)
 
-// Потолок одной записи: защищает и от опечаток, и от переполнения при умножении
+// Потолок одной записи: защищает и от опечаток, и от переполнения
 const maxEntryMinutes = 24 * 60
 
-// parseDuration ищет в строке "N час/часа/часов/ч" и "N мин/минут…". Единицы времени - только точные слова,
-// чтобы "5 минимальных" или "12 часовой" не стали временем. Число не считается длительностью, если оно часть
-// ключа задачи ("ABC-123 чинил") или времени ("10:30 часов")
+const durationHint = `нужно "… - 8ч", "… - 30м" или "… - 8ч 30м"`
+
+// parseDuration берёт время из конца строки: запись имеет вид "<описание> - <время>". Всё до последнего
+// " - " - описание, в нём могут быть любые числа, версии и ключи задач
 func parseDuration(line string) (time.Duration, error) {
-	var hours, minutes []float64
-	for _, m := range amountRe.FindAllStringSubmatchIndex(line, -1) {
-		if partOfToken(line[:m[0]]) {
-			continue
-		}
-		num, err := strconv.ParseFloat(strings.Replace(line[m[2]:m[3]], ",", ".", 1), 64)
-		if err != nil {
-			continue
-		}
-		word := strings.ToLower(line[m[4]:m[5]])
-		switch {
-		case hourWords[word]:
-			hours = append(hours, num)
-		case minuteWords[word]:
-			minutes = append(minutes, num)
-		}
+	i := strings.LastIndex(line, " - ")
+	if i < 0 || strings.TrimSpace(line[:i]) == "" {
+		return 0, errors.New("нет времени в конце строки: " + durationHint)
+	}
+	tail := strings.TrimSpace(line[i+len(" - "):])
+	m := durationRe.FindStringSubmatch(strings.ToLower(tail))
+	if tail == "" || m == nil {
+		return 0, fmt.Errorf("%q - не время: %s", tail, durationHint)
 	}
 
+	hours, _ := strconv.Atoi(m[1])
+	minutes, _ := strconv.Atoi(m[2])
+	if m[1] != "" && minutes > 59 {
+		return 0, errors.New("при часах минут должно быть меньше 60: " + durationHint)
+	}
+	total := hours*60 + minutes
 	switch {
-	case len(hours) == 0 && len(minutes) == 0:
-		return 0, errors.New(`не нашёл длительность: нужно, например, "2 часа" или "30 минут"`)
-	case len(hours) > 1:
-		return 0, errors.New("часы указаны несколько раз")
-	case len(minutes) > 1:
-		return 0, errors.New("минуты указаны несколько раз")
-	}
-
-	var total float64
-	if len(hours) == 1 {
-		total += hours[0] * 60
-	}
-	if len(minutes) == 1 {
-		total += minutes[0]
-	}
-	if total > maxEntryMinutes {
+	case len(m[1]) > 4 || len(m[2]) > 4 || total > maxEntryMinutes:
 		return 0, errors.New("в одной записи больше суток")
-	}
-	d := time.Duration(math.Round(total)) * time.Minute
-	if d <= 0 {
+	case total == 0:
 		return 0, errors.New("длительность должна быть больше нуля")
 	}
-	return d, nil
-}
-
-// partOfToken - число продолжает слово, ключ задачи или время: перед ним ASCII-буква, цифра или "_",
-// либо "-", ".", ",", ":" сразу после ASCII-буквы или цифры ("ABC-123", "v1.2", "10:30")
-func partOfToken(before string) bool {
-	prev, size := utf8.DecodeLastRuneInString(before)
-	if size == 0 {
-		return false
-	}
-	if isASCIIAlnum(prev) || prev == '_' {
-		return true
-	}
-	if prev == '-' || prev == '.' || prev == ',' || prev == ':' {
-		prev2, _ := utf8.DecodeLastRuneInString(before[:len(before)-size])
-		return isASCIIAlnum(prev2)
-	}
-	return false
-}
-
-func isASCIIAlnum(r rune) bool {
-	return r < utf8.RuneSelf && (unicode.IsLetter(r) || unicode.IsDigit(r))
+	return time.Duration(total) * time.Minute, nil
 }
 
 // FormatDuration печатает длительность по-человечески: "7ч 30м", "8ч", "45м"

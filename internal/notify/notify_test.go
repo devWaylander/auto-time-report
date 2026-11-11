@@ -78,7 +78,7 @@ func savePost(t *testing.T, st *store.Store, u store.User, text string) {
 func TestDailyReminder(t *testing.T) {
 	n, out, st, u := setup(t, nil)
 	ctx := context.Background()
-	savePost(t, st, u, "19.10\nРабота - 8 часов")
+	savePost(t, st, u, "19.10\nРабота - 8ч")
 
 	// Вторник 20.10: до 19:00 молчим
 	if err := n.Tick(ctx, at(20, 18, 59)); err != nil {
@@ -100,7 +100,7 @@ func TestDailyReminder(t *testing.T) {
 
 	// День уже записан - напоминания нет
 	n2, out2, st2, u2 := setup(t, nil)
-	savePost(t, st2, u2, "20.10\nРабота - 8 часов")
+	savePost(t, st2, u2, "20.10\nРабота - 8ч")
 	if err := n2.Tick(ctx, at(20, 20, 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestNoRemindersOnDaysOff(t *testing.T) {
 func TestWeeklyPreview(t *testing.T) {
 	n, out, st, u := setup(t, nil)
 	ctx := context.Background()
-	savePost(t, st, u, "23.10\nРабота - 8 часов")
+	savePost(t, st, u, "23.10\nРабота - 8ч")
 
 	// Пятница 23.10, по умолчанию превью в 16:00
 	if err := n.Tick(ctx, at(23, 15, 59)); err != nil {

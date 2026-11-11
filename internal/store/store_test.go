@@ -267,7 +267,7 @@ func TestSubmissions(t *testing.T) {
 
 	sub := Submission{
 		UserID: u.ID, IssueKey: "ABC-1", WorkDate: date(t, "2026-10-19"),
-		Duration: 7*time.Hour + 30*time.Minute, Comment: "XYZ-1: ревью - 7 часов 30 минут",
+		Duration: 7*time.Hour + 30*time.Minute, Comment: "XYZ-1: ревью - 7ч 30м",
 		WorklogID: 1234567, PeriodID: 123,
 	}
 	saved, err := s.SaveSubmission(ctx, sub)

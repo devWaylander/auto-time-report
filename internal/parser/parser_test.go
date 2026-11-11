@@ -49,26 +49,26 @@ func lineErrors(t *testing.T, err error) []int {
 
 func TestParseWeekSingleIssue(t *testing.T) {
 	text := `12.10
-Изучение требований, проработка решения - 5 часов 30 минут
+Изучение требований, проработка решения - 5ч 30м
 
-Груминг 2 - 2 часа 30 минут
+Груминг 2 - 2ч 30м
 
 13.10
-Ревью кода - 2 часа
+Ревью кода - 2ч
 
-XYZ-4108: Правка конфигурации сборки - 6 часов - реализация
+XYZ-4108: Правка конфигурации сборки - реализация - 6ч
 
 14.10
-XYZ-4104: Удаление устаревшего кода - реализация - 7 часов
+XYZ-4104: Удаление устаревшего кода - реализация - 7ч
 
-XYZ-4108: Правка конфигурации сборки - 1 час - реализация
+XYZ-4108: Правка конфигурации сборки - реализация - 1ч
 
 15.10
-XYZ-4104: Удаление устаревшего кода - реализация - 7 часов
-XYZ-4108: Правка конфигурации сборки - 1 час - реализация
+XYZ-4104: Удаление устаревшего кода - реализация - 7ч
+XYZ-4108: Правка конфигурации сборки - реализация - 1ч
 
 16.10
-XYZ-4087: Справочник статусов - реализация - 8 часов`
+XYZ-4087: Справочник статусов - реализация - 8ч`
 
 	r := mustParse(t, text, "ABC-1", at(2026, 10, 20, 12))
 
@@ -90,7 +90,7 @@ XYZ-4087: Справочник статусов - реализация - 8 ча�
 		t.Errorf("total = %v, want 40h", r.Total())
 	}
 
-	wantComment := "Изучение требований, проработка решения - 5 часов 30 минут\n\nГруминг 2 - 2 часа 30 минут"
+	wantComment := "Изучение требований, проработка решения - 5ч 30м\n\nГруминг 2 - 2ч 30м"
 	if got := r.Worklogs[0].Comment(); got != wantComment {
 		t.Errorf("comment = %q, want %q", got, wantComment)
 	}
@@ -99,15 +99,15 @@ XYZ-4087: Справочник статусов - реализация - 8 ча�
 func TestParseMultipleIssues(t *testing.T) {
 	text := `ABC-1
 19.10
-XYZ-101: Ревью кода - 2 часа
-XYZ-102: Правка конфигурации - 4 часа
+XYZ-101: Ревью кода - 2ч
+XYZ-102: Правка конфигурации - 4ч
 
 20.10
-XYZ-103: Справочник - 8 часов
+XYZ-103: Справочник - 8ч
 
 ABC-2
 19.10
-Онбординг - 2 часа`
+Онбординг - 2ч`
 
 	r := mustParse(t, text, "", at(2026, 10, 20, 18))
 
@@ -143,26 +143,18 @@ func TestParseDurations(t *testing.T) {
 		line string
 		want time.Duration
 	}{
-		{"Работа - 1 час", time.Hour},
-		{"Работа - 2 часа", 2 * time.Hour},
-		{"Работа - 6 часов", 6 * time.Hour},
-		{"Работа - 30 минут", 30 * time.Minute},
-		{"Работа - 1 минута", time.Minute},
-		{"Работа - 5 часов 30 минут", 5*time.Hour + 30*time.Minute},
-		{"Работа - 2ч", 2 * time.Hour},
-		{"Работа - 2 ч 15 мин", 2*time.Hour + 15*time.Minute},
-		{"Работа - 2ч30мин", 2*time.Hour + 30*time.Minute},
-		{"Работа - 1,5 часа", 90 * time.Minute},
-		{"Работа - 1.5 ЧАСА", 90 * time.Minute},
-		{"ABC-123 чинил баг - 3 часа", 3 * time.Hour},
-		{"ABC-12 часовой пояс - 1 час", time.Hour},
-		{"Созвон 2 раза - 45 минут", 45 * time.Minute},
-		{"Ревью -2 часа 30 минут", 2*time.Hour + 30*time.Minute},
-		{"Ревью:2 часа 30 минут", 2*time.Hour + 30*time.Minute},
-		{"До 5 минимальных - 1 час", time.Hour},
-		{"Задача про 12 часовой пояс - 1 час", time.Hour},
-		{"Созвон в 10:30 - 30 минут", 30 * time.Minute},
-		{"Работа - 15 минуту", 15 * time.Minute},
+		// Оба привычных вида: "задача - что сделано - время" и "что сделано - время"
+		{"XYZ-4156: Обновление зависимостей - реализация - 6ч", 6 * time.Hour},
+		{"Груминг бэклога - 1ч", time.Hour},
+		{"Работа - 30м", 30 * time.Minute},
+		{"Работа - 8ч 30м", 8*time.Hour + 30*time.Minute},
+		{"Работа - 8ч30м", 8*time.Hour + 30*time.Minute},
+		{"Работа - 90м", 90 * time.Minute},
+		{"Работа - 2Ч", 2 * time.Hour},
+		// Числа в описании не мешают: время - только хвост после последнего " - "
+		{"Созвон в 10:30 - 2 раза по 5м - 45м", 45 * time.Minute},
+		{"ABC-12 часовой пояс - 1ч", time.Hour},
+		{"Работа - 24ч", 24 * time.Hour},
 	}
 	for _, tt := range tests {
 		t.Run(tt.line, func(t *testing.T) {
@@ -180,13 +172,19 @@ func TestParseDurations(t *testing.T) {
 func TestParseDurationErrors(t *testing.T) {
 	for _, line := range []string{
 		"Работа без времени",
-		"Работа - 2 часа и ещё 3 часа",
-		"Работа - 10 минут 20 минут",
-		"Работа - 0 часов",
-		"ABC-123 чинил",
-		"Работа - 9007199254741052 минут",
-		"Работа - 25 часов",
-		"Работа - 5 минимальных",
+		"8ч",
+		"- 8ч",
+		"Работа -8ч",
+		"Работа - 8 часов",
+		"Работа - 8 ч",
+		"Работа - 1,5ч",
+		"Работа - 6ч - реализация",
+		"Работа - 30м 8ч",
+		"Работа - 0ч",
+		"Работа - 25ч",
+		"Работа - 1ч 60м",
+		"Работа - 9007199254741052м",
+		"Работа - ",
 	} {
 		t.Run(line, func(t *testing.T) {
 			if d, err := parseDuration(line); err == nil {
@@ -198,14 +196,14 @@ func TestParseDurationErrors(t *testing.T) {
 
 func TestParseYearBoundary(t *testing.T) {
 	t.Run("декабрьская неделя отправлена в январе", func(t *testing.T) {
-		r := mustParse(t, "28.12\nРабота - 8 часов\n30.12\nРабота - 7 часов", "ABC-1", at(2027, 1, 11, 10))
+		r := mustParse(t, "28.12\nРабота - 8ч\n30.12\nРабота - 7ч", "ABC-1", at(2027, 1, 11, 10))
 		if got := r.Worklogs[0].Date; !got.Equal(day(2026, 12, 28)) {
 			t.Fatalf("date = %v, want 2026-12-28", got)
 		}
 	})
 
 	t.Run("опечатка в будущую дату на стыке", func(t *testing.T) {
-		_, err := Parse("02.01\nРабота - 8 часов", "ABC-1", at(2026, 12, 30, 10))
+		_, err := Parse("02.01\nРабота - 8ч", "ABC-1", at(2026, 12, 30, 10))
 		if lines := lineErrors(t, err); len(lines) != 1 || lines[0] != 1 {
 			t.Fatalf("error lines = %v, want [1]", lines)
 		}
@@ -216,21 +214,21 @@ func TestParseYearBoundary(t *testing.T) {
 		if now.UTC().Day() != 31 {
 			t.Fatal("test setup: expected UTC to still be Dec 31")
 		}
-		r := mustParse(t, "01.01\nДежурство - 1 час", "ABC-1", now)
+		r := mustParse(t, "01.01\nДежурство - 1ч", "ABC-1", now)
 		if got := r.Worklogs[0].Date; !got.Equal(day(2027, 1, 1)) {
 			t.Fatalf("date = %v, want 2027-01-01", got)
 		}
 	})
 
 	t.Run("29.02 в невисокосный год", func(t *testing.T) {
-		_, err := Parse("29.02\nРабота - 8 часов", "ABC-1", at(2027, 3, 2, 10))
+		_, err := Parse("29.02\nРабота - 8ч", "ABC-1", at(2027, 3, 2, 10))
 		if lines := lineErrors(t, err); len(lines) != 1 {
 			t.Fatalf("error lines = %v, want one error", lines)
 		}
 	})
 
 	t.Run("29.02 в високосный год", func(t *testing.T) {
-		r := mustParse(t, "29.02\nРабота - 8 часов", "ABC-1", at(2028, 3, 2, 10))
+		r := mustParse(t, "29.02\nРабота - 8ч", "ABC-1", at(2028, 3, 2, 10))
 		if got := r.Worklogs[0].Date; !got.Equal(day(2028, 2, 29)) {
 			t.Fatalf("date = %v, want 2028-02-29", got)
 		}
@@ -246,7 +244,7 @@ func TestParseErrors(t *testing.T) {
 	}{
 		{
 			name:      "запись до даты",
-			text:      "Работа - 2 часа\n19.10\nРабота - 6 часов",
+			text:      "Работа - 2ч\n19.10\nРабота - 6ч",
 			wantLines: []int{1},
 		},
 		{
@@ -256,32 +254,32 @@ func TestParseErrors(t *testing.T) {
 		},
 		{
 			name:      "несуществующая дата, записи под ней молча пропускаются",
-			text:      "31.02\nРабота - 2 часа\nЕщё - 1 час",
+			text:      "31.02\nРабота - 2ч\nЕщё - 1ч",
 			wantLines: []int{1},
 		},
 		{
 			name:      "будущая дата",
-			text:      "21.10\nРабота - 2 часа",
+			text:      "21.10\nРабота - 2ч",
 			wantLines: []int{1},
 		},
 		{
 			name:      "повтор даты в одной задаче",
-			text:      "19.10\nРабота - 2 часа\n19.10\nЕщё - 1 час",
+			text:      "19.10\nРабота - 2ч\n19.10\nЕщё - 1ч",
 			wantLines: []int{3},
 		},
 		{
 			name:      "после смены задачи нужна дата",
-			text:      "19.10\nРабота - 2 часа\nABC-2\nЕщё - 1 час",
+			text:      "19.10\nРабота - 2ч\nABC-2\nЕщё - 1ч",
 			wantLines: []int{4},
 		},
 		{
 			name:      "больше суток за день по всем задачам",
-			text:      "ABC-1\n19.10\nРабота - 20 часов\nABC-2\n19.10\nЕщё - 5 часов",
+			text:      "ABC-1\n19.10\nРабота - 20ч\nABC-2\n19.10\nЕщё - 5ч",
 			wantLines: []int{3},
 		},
 		{
 			name:      "все ошибки сразу и по порядку строк",
-			text:      "Работа - 1 час\n19.10\nБез времени\n22.10\nРабота - 1 час",
+			text:      "Работа - 1ч\n19.10\nБез времени\n22.10\nРабота - 1ч",
 			wantLines: []int{1, 3, 4},
 		},
 	}
@@ -306,16 +304,16 @@ func TestParseEmptyAndNoIssue(t *testing.T) {
 	if _, err := Parse("\n  \n", "ABC-1", now); err == nil {
 		t.Fatal("expected error for empty post")
 	}
-	_, err := Parse("19.10\nРабота - 1 час", "", now)
+	_, err := Parse("19.10\nРабота - 1ч", "", now)
 	if lines := lineErrors(t, err); len(lines) != 1 || lines[0] != 2 {
 		t.Fatalf("error lines = %v, want [2]", lines)
 	}
 }
 
 func TestParseWhitespace(t *testing.T) {
-	text := "\u00a019.10\u00a0\r\n  Работа\u00a0-\u00a02\u00a0часа  \r\n"
+	text := "\u00a019.10\u00a0\r\n  Работа\u00a0-\u00a02ч  \r\n"
 	r := mustParse(t, text, "ABC-1", at(2026, 10, 20, 12))
-	if got := r.Worklogs[0].Entries[0].Text; got != "Работа - 2 часа" {
+	if got := r.Worklogs[0].Entries[0].Text; got != "Работа - 2ч" {
 		t.Fatalf("entry text = %q", got)
 	}
 	if strings.ContainsAny(r.Worklogs[0].Comment(), "\r\u00a0") {
@@ -325,7 +323,7 @@ func TestParseWhitespace(t *testing.T) {
 
 func TestLooksLikePost(t *testing.T) {
 	for text, want := range map[string]bool{
-		"19.10\nРабота - 2 часа":         true,
+		"19.10\nРабота - 2ч":         true,
 		"\n\n  ABC-1\n19.10\nРабота":     true,
 		"Купить молоко":                  false,
 		"Заметка про 19.10\n19.10":       false,
@@ -353,16 +351,16 @@ func TestFormatDuration(t *testing.T) {
 
 // В ошибке - день и начало строки, а не номер: в Telegram строки переносятся, номер не сверить
 func TestLineErrorMessage(t *testing.T) {
-	text := "09.11\nРабота - 8 часов\n\n11.11\nГруминг - 1 час\n\nахахах\n\n" +
+	text := "09.11\nРабота - 8ч\n\n11.11\nГруминг - 1ч\n\nахахах\n\n" +
 		"Очень длинная запись без длительности, которая точно не влезет в одну строку экрана\n\n" +
-		"31.02\n\n12.11\nРабота - 1 час"
+		"31.02\n\n12.11\nРабота - 1ч"
 	_, err := Parse(text, "ABC-1", at(2026, 11, 11, 12))
 	if err == nil {
 		t.Fatal("expected errors")
 	}
 	want := []string{
-		`11.11, "ахахах": не нашёл длительность`,
-		`11.11, "Очень длинная запись без длительности, которая…": не нашёл длительность`,
+		`11.11, "ахахах": нет времени в конце строки`,
+		`11.11, "Очень длинная запись без длительности, которая…": нет времени в конце строки`,
 		`"31.02": дата 31.02 не существует`,
 		`"12.11": дата 12.11.2026 в будущем`,
 	}

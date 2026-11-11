@@ -59,7 +59,7 @@ func TestCreateWorklog(t *testing.T) {
 			"period":                "none",
 			"inline":                "true",
 			"decorator":             "dialog",
-			"comment":               "XYZ-1: работа - 7 часов 30 минут",
+			"comment":               "XYZ-1: работа - 7ч 30м",
 			"wa_1":                  "4",
 			"wa_2":                  "OPEN",
 		}
@@ -76,7 +76,7 @@ func TestCreateWorklog(t *testing.T) {
 
 	got, err := c.CreateWorklog(context.Background(), WorklogInput{
 		IssueKey: "ABC-1", Date: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
-		Duration: 7*time.Hour + 30*time.Minute, Comment: "XYZ-1: работа - 7 часов 30 минут",
+		Duration: 7*time.Hour + 30*time.Minute, Comment: "XYZ-1: работа - 7ч 30м",
 	})
 	if err != nil {
 		t.Fatal(err)
