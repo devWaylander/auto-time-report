@@ -395,3 +395,14 @@ func TestPostURL(t *testing.T) {
 		}
 	}
 }
+
+func TestPostErrorsText(t *testing.T) {
+	err := errors.New("boom")
+	text := postErrorsText("⚠️ В посте недели ошибки:", store.WeekPost{ChatID: -1001234567890, MessageID: 7}, err)
+	if !strings.HasPrefix(text, "⚠️ В посте недели ошибки:\n") || !strings.Contains(text, `<a href="https://t.me/c/1234567890/7">Открыть пост</a>`) {
+		t.Errorf("no post link:\n%s", text)
+	}
+	if text := postErrorsText("x", store.WeekPost{ChatID: 123, MessageID: 7}, err); strings.Contains(text, "Открыть пост") {
+		t.Errorf("link for a chat that is not a channel:\n%s", text)
+	}
+}

@@ -190,8 +190,12 @@ func TestChannelNotesDoNotReplaceWeekPost(t *testing.T) {
 	if latestText(t, b) != "19.10\nРабота" {
 		t.Fatal("edit of the week post was not saved")
 	}
-	if texts := tg.sent(tg.take()); len(texts) != 1 || !strings.Contains(texts[0], "ошибки") {
+	calls := tg.take()
+	if texts := tg.sent(calls); len(texts) != 1 || !strings.Contains(texts[0], "ошибки") {
 		t.Fatalf("expected one error message, got %q", texts)
+	}
+	if markup := lastParam(calls, "sendMessage", "reply_markup"); !strings.Contains(markup, viewStatus) {
+		t.Errorf("error message has no refresh button: %s", markup)
 	}
 }
 

@@ -301,7 +301,11 @@ func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) {
 
 	report, err := parser.Parse(saved.Text, b.cfg.DefaultIssue, b.now())
 	if err != nil {
-		b.notify(ctx, "⚠️ В посте недели ошибки:\n"+formatParseErrors(err))
+		// "Обновить" перерисует это сообщение: после исправления на его месте будет статус недели
+		text := postErrorsText("⚠️ В посте недели ошибки:", saved, err)
+		if _, err := b.send(ctx, text, previewKeyboard(false, 0, "", 0, 0, false)); err != nil {
+			slog.Error("send post errors", "error", err)
+		}
 		return
 	}
 	if warning, err := b.changedSubmitted(ctx, report); err != nil {

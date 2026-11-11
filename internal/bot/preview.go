@@ -109,11 +109,7 @@ func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.Rep
 	case errors.Is(err, errNoPost):
 		return "Поста текущей недели в канале пока нет", refreshOnly
 	case err != nil && w.post.ID != 0:
-		text := "⚠️ В посте недели ошибки, предпросмотр не собран:\n" + formatParseErrors(err)
-		if u := postURL(w.post.ChatID, w.post.MessageID); u != "" {
-			text += fmt.Sprintf("\n\n<a href=\"%s\">Открыть пост</a>", html.EscapeString(u))
-		}
-		return text, refreshOnly
+		return postErrorsText("⚠️ В посте недели ошибки, предпросмотр не собран:", w.post, err), refreshOnly
 	case err != nil:
 		slog.Error("load week", "error", err)
 		return "⚠️ Предпросмотр не собран, подробности в логах бота", refreshOnly
@@ -331,6 +327,15 @@ var statusButton = models.InlineKeyboardMarkup{InlineKeyboard: [][]models.Inline
 
 // postURL - ссылка на сообщение канала. Вид t.me/c/... работает и для закрытых каналов, если ты в них
 // состоишь. У каналов ID начинается с -100, у остальных чатов таких ссылок нет
+// postErrorsText - заголовок, ошибки разбора поста и ссылка на сам пост, если её можно собрать
+func postErrorsText(header string, post store.WeekPost, err error) string {
+	text := header + "\n" + formatParseErrors(err)
+	if u := postURL(post.ChatID, post.MessageID); u != "" {
+		text += fmt.Sprintf("\n\n<a href=\"%s\">Открыть пост</a>", html.EscapeString(u))
+	}
+	return text
+}
+
 func postURL(chatID, messageID int64) string {
 	id, ok := strings.CutPrefix(strconv.FormatInt(chatID, 10), "-100")
 	if !ok || id == "" || messageID <= 0 {
