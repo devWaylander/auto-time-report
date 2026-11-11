@@ -350,3 +350,32 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+// В ошибке - день и начало строки, а не номер: в Telegram строки переносятся, номер не сверить
+func TestLineErrorMessage(t *testing.T) {
+	text := "09.11\nРабота - 8 часов\n\n11.11\nГруминг - 1 час\n\nахахах\n\n" +
+		"Очень длинная запись без длительности, которая точно не влезет в одну строку экрана\n\n" +
+		"31.02\n\n12.11\nРабота - 1 час"
+	_, err := Parse(text, "ABC-1", at(2026, 11, 11, 12))
+	if err == nil {
+		t.Fatal("expected errors")
+	}
+	want := []string{
+		`11.11, "ахахах": не нашёл длительность`,
+		`11.11, "Очень длинная запись без длительности, которая…": не нашёл длительность`,
+		`"31.02": дата 31.02 не существует`,
+		`"12.11": дата 12.11.2026 в будущем`,
+	}
+	got := strings.Split(err.Error(), "\n")
+	if len(got) != len(want) {
+		t.Fatalf("errors:\n%s", err)
+	}
+	for i := range want {
+		if !strings.HasPrefix(got[i], want[i]) {
+			t.Errorf("error %d = %q, want prefix %q", i, got[i], want[i])
+		}
+	}
+	if strings.Contains(err.Error(), "строка") {
+		t.Errorf("line numbers are shown: %s", err)
+	}
+}

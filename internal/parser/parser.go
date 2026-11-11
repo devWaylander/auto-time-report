@@ -82,14 +82,39 @@ func (r Report) Total() time.Duration {
 	return total
 }
 
-// LineError - ошибка формата в конкретной строке поста
+// LineError - ошибка формата в конкретной строке поста. Человеку показываются день и начало строки:
+// номер в Telegram не сверить - длинные строки переносятся, экраны разные
 type LineError struct {
-	Line int
+	Line int       // номер строки с единицы, считая пустые; нужен только для порядка ошибок
+	Date time.Time // день, под которым стоит строка; нулевой - строка до первой даты или сама строка-дата
+	Text string    // строка поста; пусто - ошибка про день целиком
 	Msg  string
 }
 
+// Сколько символов строки показывать в ошибке
+const shownLineRunes = 50
+
 func (e *LineError) Error() string {
-	return fmt.Sprintf("строка %d: %s", e.Line, e.Msg)
+	var where []string
+	if !e.Date.IsZero() {
+		where = append(where, e.Date.Format("02.01"))
+	}
+	if e.Text != "" {
+		text := e.Text
+		if r := []rune(text); len(r) > shownLineRunes {
+			// Режем по последнему пробелу, чтобы не обрывать слово
+			cut := string(r[:shownLineRunes])
+			if i := strings.LastIndex(cut, " "); i > 0 {
+				cut = cut[:i]
+			}
+			text = strings.TrimRight(cut, " ,.-:;") + "…"
+		}
+		where = append(where, `"`+text+`"`)
+	}
+	if len(where) == 0 {
+		return e.Msg
+	}
+	return strings.Join(where, ", ") + ": " + e.Msg
 }
 
 const maxDayDuration = 24 * time.Hour
@@ -108,8 +133,8 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 	var (
 		errs     []error
 		worklogs = map[worklogKey]*Worklog{}
-		// Первая строка, где для пары "задача + дата" встретилась дата, для сообщения о повторе
-		dateLines = map[worklogKey]int{}
+		// Пары "задача + дата", для которых дата уже встречалась: повтор - ошибка
+		seenDates = map[worklogKey]bool{}
 		issue     = defaultIssue
 		// Нулевая дата - даты ещё нет или задача только что сменилась
 		date time.Time
@@ -117,8 +142,8 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 		badDate bool
 		today   = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	)
-	fail := func(line int, format string, args ...any) {
-		errs = append(errs, &LineError{Line: line, Msg: fmt.Sprintf(format, args...)})
+	fail := func(line int, date time.Time, text, format string, args ...any) {
+		errs = append(errs, &LineError{Line: line, Date: date, Text: text, Msg: fmt.Sprintf(format, args...)})
 	}
 
 	for i, raw := range strings.Split(text, "\n") {
@@ -136,17 +161,17 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 		case dateLineRe.MatchString(line):
 			d, err := resolveDate(dateLineRe.FindStringSubmatch(line), today)
 			if err != nil {
-				fail(n, "%v", err)
+				fail(n, time.Time{}, line, "%v", err)
 				date, badDate = time.Time{}, true
 				continue
 			}
 			key := worklogKey{issue: issue, date: d}
-			if first, ok := dateLines[key]; ok {
-				fail(n, "дата %s для задачи %s уже была в строке %d", d.Format("02.01"), issue, first)
+			if seenDates[key] {
+				fail(n, time.Time{}, line, "дата %s для задачи %s уже была выше", d.Format("02.01"), issue)
 				date, badDate = time.Time{}, true
 				continue
 			}
-			dateLines[key] = n
+			seenDates[key] = true
 			date, badDate = d, false
 
 		default:
@@ -154,16 +179,16 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 				continue
 			}
 			if date.IsZero() {
-				fail(n, "запись без даты: перед ней должна быть строка вида 19.10")
+				fail(n, date, line, "запись без даты: перед ней должна быть строка вида 19.10")
 				continue
 			}
 			if issue == "" {
-				fail(n, "не указана задача: добавь строку с ключом задачи или задай JIRA_DEFAULT_ISSUE_KEY")
+				fail(n, date, line, "не указана задача: добавь строку с ключом задачи или задай JIRA_DEFAULT_ISSUE_KEY")
 				continue
 			}
 			d, err := parseDuration(line)
 			if err != nil {
-				fail(n, "%v", err)
+				fail(n, date, line, "%v", err)
 				continue
 			}
 			key := worklogKey{issue: issue, date: date}
@@ -190,7 +215,7 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 
 	for _, d := range report.Dates() {
 		if total := report.DayTotal(d); total > maxDayDuration {
-			fail(firstLineOf(report, d), "за %s набралось %s, это больше суток", d.Format("02.01"), FormatDuration(total))
+			fail(firstLineOf(report, d), d, "", "за день набралось %s, это больше суток", FormatDuration(total))
 		}
 	}
 
