@@ -138,6 +138,28 @@ ABC-2
 	}
 }
 
+func TestParseEmptyDates(t *testing.T) {
+	// 21.10 пустая, 19.10 у ABC-1 пустая, но у ABC-2 записи есть - день не пустой
+	text := `ABC-1
+21.10
+
+19.10
+
+20.10
+Работа - 8ч
+
+ABC-2
+19.10
+Онбординг - 2ч`
+	r := mustParse(t, text, "", at(2026, 10, 21, 18))
+	if len(r.EmptyDates) != 1 || !r.EmptyDates[0].Equal(day(2026, 10, 21)) {
+		t.Errorf("empty dates = %v, want [21.10]", r.EmptyDates)
+	}
+	if r := mustParse(t, "19.10\nРабота - 8ч", "ABC-1", at(2026, 10, 21, 18)); len(r.EmptyDates) != 0 {
+		t.Errorf("empty dates = %v, want none", r.EmptyDates)
+	}
+}
+
 func TestParseDurations(t *testing.T) {
 	tests := []struct {
 		line string

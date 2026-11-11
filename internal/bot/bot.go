@@ -9,6 +9,7 @@ import (
 	"html"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -276,10 +277,10 @@ func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited boo
 		post.EditedAt = time.Unix(int64(msg.EditDate), 0)
 	}
 
-	_, err := b.store.WeekPostByMessage(ctx, post.ChatID, post.MessageID)
+	known, err := b.store.WeekPostByMessage(ctx, post.ChatID, post.MessageID)
 	switch {
 	case err == nil:
-		b.updateKnownPost(ctx, post)
+		b.updateKnownPost(ctx, known, post)
 	case errors.Is(err, store.ErrNotFound):
 		b.considerNewPost(ctx, post)
 	default:
@@ -287,7 +288,8 @@ func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited boo
 	}
 }
 
-func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) {
+// updateKnownPost сохраняет правку поста недели; prev - сохранённая до неё версия
+func (b *Bot) updateKnownPost(ctx context.Context, prev, post store.WeekPost) {
 	saved, updated, err := b.store.SaveWeekPost(ctx, post)
 	if err != nil {
 		slog.Error("save week post", "error", err)
@@ -308,10 +310,36 @@ func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) {
 		}
 		return
 	}
+	if warning := b.newEmptyDates(prev, report); warning != "" {
+		b.notify(ctx, warning)
+	}
 	if warning, err := b.changedSubmitted(ctx, report); err != nil {
 		slog.Error("compare with submitted", "error", err)
 	} else if warning != "" {
 		b.notify(ctx, warning)
+	}
+}
+
+// newEmptyDates - предупреждение о датах без записей, появившихся этой правкой. Уже известные пустые
+// даты не повторяются, чтобы не писать на каждую правку, пока день не дописан
+func (b *Bot) newEmptyDates(prev store.WeekPost, report parser.Report) string {
+	var before []time.Time
+	if old, err := parser.Parse(prev.Text, b.cfg.DefaultIssue, b.now()); err == nil {
+		before = old.EmptyDates
+	}
+	var dates []string
+	for _, d := range report.EmptyDates {
+		if !slices.ContainsFunc(before, d.Equal) {
+			dates = append(dates, d.Format("02.01"))
+		}
+	}
+	switch len(dates) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("⚠️ %s: дата есть, записей под ней нет", dates[0])
+	default:
+		return fmt.Sprintf("⚠️ %s: даты есть, записей под ними нет", strings.Join(dates, ", "))
 	}
 }
 

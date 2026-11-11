@@ -199,6 +199,31 @@ func TestChannelNotesDoNotReplaceWeekPost(t *testing.T) {
 	}
 }
 
+func TestEmptyDateWarnedOnce(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	ctx := context.Background()
+
+	week := channelPost("19.10\nРабота - 8ч", day(10, 19))
+	b.onChannelPost(ctx, week, false)
+	tg.take()
+
+	// Новая пустая дата - предупреждение
+	b.onChannelPost(ctx, edit(week, "19.10\nРабота - 8ч\n\n20.10", day(10, 20)), true)
+	if texts := tg.sent(tg.take()); len(texts) != 1 || texts[0] != "⚠️ 20.10: дата есть, записей под ней нет" {
+		t.Fatalf("expected an empty date warning, got %q", texts)
+	}
+	// Та же пустая дата при следующей правке - без повтора
+	b.onChannelPost(ctx, edit(week, "19.10\nРабота, правка - 8ч\n\n20.10", day(10, 20)), true)
+	if texts := tg.sent(tg.take()); len(texts) != 0 {
+		t.Fatalf("empty date warned again: %q", texts)
+	}
+	// Дописанный день - тишина
+	b.onChannelPost(ctx, edit(week, "19.10\nРабота, правка - 8ч\n\n20.10\nРабота - 8ч", day(10, 20)), true)
+	if texts := tg.sent(tg.take()); len(texts) != 0 {
+		t.Fatalf("filled day produced messages: %q", texts)
+	}
+}
+
 func TestNextWeekPostAndLateFix(t *testing.T) {
 	b, tg, _, _ := newTelegramBot(t)
 	b.clock = func() time.Time { return time.Date(2026, 10, 28, 12, 0, 0, 0, tz) }

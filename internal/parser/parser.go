@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,6 +48,8 @@ func (w Worklog) Comment() string {
 // Report - разобранный пост, worklog'и отсортированы по дате, затем по задаче
 type Report struct {
 	Worklogs []Worklog
+	// Даты, под которыми в посте нет ни одной записи, по возрастанию. Это не ошибка: день может быть ещё не дописан
+	EmptyDates []time.Time
 }
 
 // Dates возвращает даты из поста по возрастанию, без повторов
@@ -208,6 +211,13 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 		}
 		return a.IssueKey < b.IssueKey
 	})
+
+	for key := range seenDates {
+		if report.DayTotal(key.date) == 0 && !slices.ContainsFunc(report.EmptyDates, key.date.Equal) {
+			report.EmptyDates = append(report.EmptyDates, key.date)
+		}
+	}
+	slices.SortFunc(report.EmptyDates, time.Time.Compare)
 
 	for _, d := range report.Dates() {
 		if total := report.DayTotal(d); total > maxDayDuration {
