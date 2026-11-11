@@ -167,7 +167,7 @@ func (b *Bot) onError(err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	b.notify(ctx, "🚨 Токеном бота пользуется ещё кто-то (Telegram вернул 409 Conflict).\n"+
-		"Если это не твой второй запуск бота - перевыпусти токен в @BotFather и не отправляй пароль-фразу, пока не разберёшься.")
+		"Если это не второй запуск бота - токен перевыпустить в @BotFather, пароль-фразу до выяснения не отправлять")
 }
 
 // redact убирает токен бота из текста: библиотека кладёт URL с токеном в ошибки сети
@@ -291,7 +291,7 @@ func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) {
 	saved, updated, err := b.store.SaveWeekPost(ctx, post)
 	if err != nil {
 		slog.Error("save week post", "error", err)
-		b.notify(ctx, "⚠️ Не смог сохранить правку поста недели, загляни в логи бота.")
+		b.notify(ctx, "⚠️ Правка поста недели не сохранена, подробности в логах бота")
 		return
 	}
 	if !updated {
@@ -329,7 +329,7 @@ func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) {
 	}
 	if _, _, err := b.store.SaveWeekPost(ctx, post); err != nil {
 		slog.Error("save week post", "error", err)
-		b.notify(ctx, "⚠️ Не смог сохранить пост недели, загляни в логи бота.")
+		b.notify(ctx, "⚠️ Пост недели не сохранён, подробности в логах бота")
 	}
 }
 
@@ -378,7 +378,7 @@ func (b *Bot) changedSubmitted(ctx context.Context, report parser.Report) (strin
 	if len(lines) == 0 {
 		return "", nil
 	}
-	return "⚠️ Ты поправил дни, которые уже записаны в Jira. Бот их не перезаписывает - поправь руками в календаре WorklogPRO:\n" +
+	return "⚠️ Изменены дни, уже записанные в Jira. Бот их не перезаписывает, правка вручную в календаре WorklogPRO:\n" +
 		strings.Join(lines, "\n"), nil
 }
 
@@ -396,8 +396,8 @@ func (b *Bot) onMessage(ctx context.Context, msg *models.Message) {
 		if err := b.deleteMessage(ctx, msg.Chat.ID, msg.ID); err != nil {
 			slog.Error("delete stray message", "error", err)
 		}
-		b.notify(ctx, "🧹 Удалил твоё сообщение: я понимаю только команды и кнопки. "+
-			"Если это была пароль-фраза - нажми кнопку отправки заново.\n/help - список команд")
+		b.notify(ctx, "🧹 Сообщение удалено: бот понимает только команды и кнопки. "+
+			"Если это была пароль-фраза - нужна повторная отправка\n/help - список команд")
 		return
 	}
 
@@ -428,7 +428,7 @@ func (b *Bot) onMessage(ctx context.Context, msg *models.Message) {
 		if err := b.deleteMessage(ctx, msg.Chat.ID, msg.ID); err != nil {
 			slog.Error("delete unknown command", "error", err)
 		}
-		b.notify(ctx, "🧹 Не знаю такой команды и на всякий случай удалил сообщение. /help - список команд")
+		b.notify(ctx, "🧹 Неизвестная команда, сообщение удалено\n/help - список команд")
 	}
 }
 
@@ -480,21 +480,21 @@ type command struct {
 }
 
 var commands = []command{
-	{name: "status", about: "превью недели"},
-	{name: "submit", about: "превью с кнопками отправки в Jira"},
+	{name: "status", about: "предпросмотр недели"},
+	{name: "submit", about: "предпросмотр с кнопками отправки в Jira"},
 	{name: "settings", about: "напоминания и пауза"},
 	{name: "daily", example: "19:30", about: "время ежедневного напоминания"},
-	{name: "weekly", example: "пт 16:00", about: "день и время недельного превью"},
+	{name: "weekly", example: "пт 16:00", about: "день и время недельного предпросмотра"},
 	{name: "vacation", example: "27.10-31.10", about: "отпуск без напоминаний", more: ", /vacation off - отменить"},
 	{name: "cancel", about: "отменить ожидание пароль-фразы"},
 	{name: "unlock", about: "снять блокировку после ошибки доступа"},
-	{name: "help", about: "что я умею"},
+	{name: "help", about: "список команд"},
 }
 
 var helpText = func() string {
 	var b strings.Builder
-	b.WriteString("<b>Что я умею</b>\n\n")
-	b.WriteString("Пиши пост недели в канал как обычно: я сам вижу каждую правку и пишу сюда, если нашёл ошибку.\n\n")
+	b.WriteString("<b>Команды</b>\n\n")
+	b.WriteString("Пост недели ведётся в канале как обычно: бот видит каждую правку и пишет сюда об ошибках\n\n")
 	for _, c := range commands {
 		if c.name == "help" {
 			continue
@@ -505,7 +505,7 @@ var helpText = func() string {
 		}
 		fmt.Fprintf(&b, " - %s%s\n", c.about, c.more)
 	}
-	b.WriteString("\nПароль-фразу отправляй <b>только</b> в ответ на мой запрос, который пришёл сразу после твоего нажатия кнопки.")
+	b.WriteString("\nПароль-фраза - <b>только</b> в ответ на запрос бота")
 	return b.String()
 }()
 

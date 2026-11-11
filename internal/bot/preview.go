@@ -107,16 +107,16 @@ func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.Rep
 	w, err := b.loadWeek(ctx)
 	switch {
 	case errors.Is(err, errNoPost):
-		return "Поста недели пока нет. Напиши его в канал: первая строка - дата, например 19.10", refreshOnly
+		return "Поста текущей недели в канале пока нет", refreshOnly
 	case err != nil && w.post.ID != 0:
-		text := "⚠️ В посте недели ошибки, превью не собрать:\n" + formatParseErrors(err)
+		text := "⚠️ В посте недели ошибки, предпросмотр не собран:\n" + formatParseErrors(err)
 		if u := postURL(w.post.ChatID, w.post.MessageID); u != "" {
 			text += fmt.Sprintf("\n\n<a href=\"%s\">Открыть пост</a>", html.EscapeString(u))
 		}
 		return text, refreshOnly
 	case err != nil:
 		slog.Error("load week", "error", err)
-		return "⚠️ Не смог собрать превью, загляни в логи бота.", refreshOnly
+		return "⚠️ Предпросмотр не собран, подробности в логах бота", refreshOnly
 	}
 
 	in := b.previewInput(ctx, w)
@@ -352,7 +352,7 @@ func weekStart(d time.Time) time.Time {
 
 // DailyReminder - напоминание notify: за сегодня в посте нет записей
 func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
-	_, err := b.send(ctx, fmt.Sprintf("📝 За сегодня (%s %s) в посте недели нет записей. Не забудь дописать.",
+	_, err := b.send(ctx, fmt.Sprintf("📝 В посте недели отсутствуют записи за сегодня (%s %s)",
 		strings.ToLower(weekdays[date.Weekday()]), date.Format("02.01")), statusButton)
 	return err
 }
@@ -360,6 +360,6 @@ func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
 // WeeklyPreview - напоминание notify: превью недели с кнопками
 func (b *Bot) WeeklyPreview(ctx context.Context) error {
 	text, markup := b.buildPreview(ctx, true)
-	_, err := b.send(ctx, "🗓 Конец недели, пора отправлять.\n\n"+text, markup)
+	_, err := b.send(ctx, "🗓 Конец рабочей недели, подготовлен предпросмотр перед отправкой\n\n"+text, markup)
 	return err
 }

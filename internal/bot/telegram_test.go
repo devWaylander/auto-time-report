@@ -479,7 +479,7 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 	b.pending = &pendingSubmit{postID: saved.ID, hash: hashText(saved.Text), promptID: 7, expires: fixedClock().Add(time.Minute)}
 	b.onMessage(ctx, dm("Str0ng-Passphrase-XYZ"))
 	outcome := strings.Join(tg.sent(tg.take()), "\n")
-	if !strings.Contains(outcome, "уже было в Jira вручную, пропустил. ⚠️ В Jira 6ч, в посте 8ч") {
+	if !strings.Contains(outcome, "уже было в Jira вручную, пропущено. ⚠️ В Jira 6ч, в посте 8ч") {
 		t.Fatalf("outcome does not show the mismatch:\n%s", outcome)
 	}
 

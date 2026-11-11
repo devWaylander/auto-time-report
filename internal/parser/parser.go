@@ -179,7 +179,7 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 				continue
 			}
 			if issue == "" {
-				fail(n, date, line, "не указана задача: добавь строку с ключом задачи или задай JIRA_DEFAULT_ISSUE_KEY")
+				fail(n, date, line, "не указана задача: нужна строка с ключом задачи или JIRA_DEFAULT_ISSUE_KEY")
 				continue
 			}
 			d, err := parseDuration(line)
@@ -311,9 +311,9 @@ const maxEntryMinutes = 24 * 60
 
 var (
 	// В строке нет " - <время>"
-	errNoDuration = errors.New(`не найдено время, ожидаю в формате: "XXч XXм", "XXч", "XXм"`)
+	errNoDuration = errors.New(`не найдено время, ожидается формат: "XXч XXм", "XXч", "XXм"`)
 	// После последнего " - " стоит не время
-	errDurationFormat = errors.New(`ожидаю формат времени: "XXч XXм", "XXч", "XXм"`)
+	errDurationFormat = errors.New(`ожидается формат времени: "XXч XXм", "XXч", "XXм"`)
 )
 
 // parseDuration берёт время из конца строки: запись имеет вид "<описание> - <время>". Всё до последнего

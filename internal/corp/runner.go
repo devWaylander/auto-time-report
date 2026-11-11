@@ -96,8 +96,8 @@ func (r *Runner) Run(ctx context.Context, passphrase []byte, job Job, hooks Hook
 	defer cancel()
 
 	if creds.VPN != nil {
-		hooks.Progress("🔐 Поднимаю VPN. Сейчас придёт ОДИН пуш Multifactor - подтверди его.\n" +
-			"Пришёл второй пуш или пуш без твоего нажатия - отклоняй.")
+		hooks.Progress("🔐 Подключение VPN. Направлен ОДИН пуш Multifactor.\n" +
+			"Второй пуш или пуш без нажатия кнопки необходимо отклонить")
 		sess, err := r.tunnel.Up(ctx, *creds.VPN)
 		if err != nil {
 			return Outcome{}, err
@@ -120,7 +120,7 @@ func (r *Runner) Run(ctx context.Context, passphrase []byte, job Job, hooks Hook
 	})
 	out := Outcome{CalendarURL: client.CalendarURL()}
 
-	hooks.Progress("🔑 Проверяю доступ к Jira…")
+	hooks.Progress("🔑 Проверка доступа к Jira…")
 	if err := client.CheckAuth(ctx); err != nil {
 		return out, err
 	}
@@ -142,7 +142,7 @@ func (r *Runner) Run(ctx context.Context, passphrase []byte, job Job, hooks Hook
 	}
 	for i, w := range job.Worklogs {
 		res := &out.Worklogs[i]
-		hooks.Progress(fmt.Sprintf("✍️ Пишу %s за %s (%d из %d)…", w.IssueKey, w.Date.Format("02.01"), i+1, len(job.Worklogs)))
+		hooks.Progress(fmt.Sprintf("✍️ Запись %s за %s (%d из %d)…", w.IssueKey, w.Date.Format("02.01"), i+1, len(job.Worklogs)))
 
 		logged, err := client.LoggedOn(ctx, w.IssueKey, w.Date)
 		if err != nil {
@@ -184,7 +184,7 @@ func (r *Runner) Run(ctx context.Context, passphrase []byte, job Job, hooks Hook
 	}
 	slices.Sort(periods)
 	for _, p := range periods {
-		hooks.Progress(fmt.Sprintf("📨 Отправляю период %d на проверку…", p))
+		hooks.Progress(fmt.Sprintf("📨 Отправка периода %d на проверку…", p))
 		if err := client.RequestApproval(ctx, p); err != nil {
 			return out, err
 		}

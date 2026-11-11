@@ -36,7 +36,7 @@ func (b *Bot) sendSettings(ctx context.Context) {
 	text, markup, err := b.settingsView(ctx)
 	if err != nil {
 		slog.Error("settings", "error", err)
-		b.notify(ctx, "⚠️ Не смог прочитать настройки, загляни в логи бота.")
+		b.notify(ctx, "⚠️ Ошибка чтения настроек, подробности в логах бота")
 		return
 	}
 	if _, err := b.send(ctx, text, markup); err != nil {
@@ -66,7 +66,7 @@ func renderSettings(st store.Settings, vacations []store.Vacation, now time.Time
 	var b strings.Builder
 	b.WriteString("<b>Напоминания</b>\n\n")
 	fmt.Fprintf(&b, "🔔 Ежедневное: %s · %s\n", onOff(st.DailyEnabled), st.DailyTime)
-	fmt.Fprintf(&b, "📅 Недельное превью: %s · %s %s\n", onOff(st.WeeklyEnabled),
+	fmt.Fprintf(&b, "📅 Недельный предпросмотр: %s · %s %s\n", onOff(st.WeeklyEnabled),
 		strings.ToLower(weekdays[st.WeeklyWeekday]), st.WeeklyTime)
 	if now.Before(st.PausedUntil) {
 		fmt.Fprintf(&b, "🔕 Пауза до %s\n", st.PausedUntil.In(now.Location()).Format("02.01 15:04"))
@@ -123,10 +123,10 @@ func (b *Bot) onSettingsButton(ctx context.Context, cq *models.CallbackQuery, me
 	})
 	if err != nil {
 		slog.Error("update settings", "error", err)
-		b.answer(ctx, cq, "Не смог сохранить", true)
+		b.answer(ctx, cq, "Не сохранено", true)
 		return
 	}
-	b.answer(ctx, cq, "Сохранил", false)
+	b.answer(ctx, cq, "Сохранено", false)
 
 	text, markup, err := b.settingsView(ctx)
 	if err != nil {
@@ -156,7 +156,7 @@ func (b *Bot) cmdDaily(ctx context.Context, args string) {
 		st.DailyTime, st.DailyEnabled = args, true
 	}); err != nil {
 		slog.Error("update settings", "error", err)
-		b.notify(ctx, "⚠️ Не смог сохранить настройки.")
+		b.notify(ctx, "⚠️ Настройки не сохранены")
 		return
 	}
 	b.notify(ctx, "🔔 Ежедневное напоминание в "+args+" по рабочим дням, если за день нет записей.")
@@ -174,10 +174,10 @@ func (b *Bot) cmdWeekly(ctx context.Context, args string) {
 		st.WeeklyWeekday, st.WeeklyTime, st.WeeklyEnabled = weekday, hhmm, true
 	}); err != nil {
 		slog.Error("update settings", "error", err)
-		b.notify(ctx, "⚠️ Не смог сохранить настройки.")
+		b.notify(ctx, "⚠️ Настройки не сохранены")
 		return
 	}
-	b.notify(ctx, fmt.Sprintf("📅 Недельное превью: %s в %s.", strings.ToLower(weekdays[weekday]), hhmm))
+	b.notify(ctx, fmt.Sprintf("📅 Недельный предпросмотр: %s в %s", strings.ToLower(weekdays[weekday]), hhmm))
 }
 
 func (b *Bot) cmdVacation(ctx context.Context, args string) {
@@ -185,7 +185,7 @@ func (b *Bot) cmdVacation(ctx context.Context, args string) {
 	if args == "off" {
 		if err := b.store.CancelVacations(ctx, b.userID, today); err != nil {
 			slog.Error("cancel vacations", "error", err)
-			b.notify(ctx, "⚠️ Не смог отменить отпуск.")
+			b.notify(ctx, "⚠️ Отпуск не отменён")
 			return
 		}
 		b.notify(ctx, "🏖 Текущие и будущие отпуска отменены, напоминания снова идут.")
@@ -199,7 +199,7 @@ func (b *Bot) cmdVacation(ctx context.Context, args string) {
 	}
 	if _, err := b.store.AddVacation(ctx, b.userID, start, end); err != nil {
 		slog.Error("add vacation", "error", err)
-		b.notify(ctx, "⚠️ Не смог сохранить отпуск.")
+		b.notify(ctx, "⚠️ Отпуск не сохранён")
 		return
 	}
 	b.notify(ctx, fmt.Sprintf("🏖 Отпуск %s-%s: напоминаний не будет.", start.Format("02.01.2006"), end.Format("02.01.2006")))
@@ -237,7 +237,7 @@ func parseDayMonth(s string, year int, loc *time.Location) (time.Time, error) {
 	day, err1 := strconv.Atoi(d)
 	month, err2 := strconv.Atoi(m)
 	if !ok || err1 != nil || err2 != nil {
-		return time.Time{}, fmt.Errorf("не понял дату %q", s)
+		return time.Time{}, fmt.Errorf("непонятная дата %q", s)
 	}
 	t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc)
 	if t.Day() != day || int(t.Month()) != month {

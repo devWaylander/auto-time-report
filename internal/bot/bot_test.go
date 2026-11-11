@@ -319,7 +319,7 @@ func TestRenderOutcome(t *testing.T) {
 		CalendarURL: "https://jira.example.com/secure/WorklogPROWorklogCalendar!default.jspa",
 	}
 	text := renderOutcome(o, errors.New("boom"))
-	for _, want := range []string{"Остановился", "19.10 ABC-1 8ч - записано", "20.10 ABC-1 8ч - ошибка", "21.10 ABC-1 8ч - не дошёл", "Период 228"} {
+	for _, want := range []string{"Остановлено", "19.10 ABC-1 8ч - записано", "20.10 ABC-1 8ч - ошибка", "21.10 ABC-1 8ч - очередь не дошла", "Период 228"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("outcome has no %q:\n%s", want, text)
 		}

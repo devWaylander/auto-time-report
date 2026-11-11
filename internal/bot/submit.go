@@ -57,7 +57,7 @@ func (b *Bot) onSubmitButton(ctx context.Context, cq *models.CallbackQuery, mess
 
 	post, err := b.store.LatestWeekPost(ctx, b.userID)
 	if err != nil || post.ID != postID || hashText(post.Text) != hash {
-		b.answer(ctx, cq, "Пост изменился - вот свежее превью", false)
+		b.answer(ctx, cq, "Пост изменился, свежий предпросмотр ниже", false)
 		b.sendPreview(ctx, true)
 		return
 	}
@@ -69,8 +69,8 @@ func (b *Bot) onSubmitButton(ctx context.Context, cq *models.CallbackQuery, mess
 
 	prompt, err := b.api.SendMessage(ctx, &tgbot.SendMessageParams{
 		ChatID: b.cfg.OwnerID,
-		Text: "🔑 Пришли пароль-фразу ответом на это сообщение. Жду 2 минуты, сообщение с фразой сразу удалю.\n\n" +
-			"Отправляй фразу, только если сам только что нажал кнопку.",
+		Text: "🔑 Ожидается пароль-фраза ответом на это сообщение в течение двух минут\n\n" +
+			"Если кнопку никто не нажимал - фразу не отправлять",
 		ReplyMarkup: models.ForceReply{ForceReply: true, InputFieldPlaceholder: "пароль-фраза"},
 	})
 	if err != nil {
@@ -90,9 +90,9 @@ func (b *Bot) onSubmitButton(ctx context.Context, cq *models.CallbackQuery, mess
 func (b *Bot) refusalLocked() string {
 	switch {
 	case b.running:
-		return "Уже отправляю, дождись окончания"
+		return "В текущий момент уже осуществляется отправка"
 	case b.locked:
-		return "🔒 Отправка заблокирована после ошибки доступа. Проверь доступы и пришли /unlock"
+		return "🔒 Отправка заблокирована после ошибки доступа. Снять блокировку после проверки доступов /unlock"
 	}
 	cutoff := b.clock().Add(-time.Hour)
 	recent := b.attempts[:0]
@@ -103,7 +103,7 @@ func (b *Bot) refusalLocked() string {
 	}
 	b.attempts = recent
 	if len(b.attempts) >= maxAttemptsPerHour {
-		return fmt.Sprintf("Не больше %d попыток в час: каждая - логин в домен и пуш MFA. Попробуй позже", maxAttemptsPerHour)
+		return fmt.Sprintf("Лимит исчерпан: не больше %d попыток в час", maxAttemptsPerHour)
 	}
 	return ""
 }
@@ -138,13 +138,13 @@ func (b *Bot) takePassphrase(ctx context.Context, msg *models.Message) bool {
 	}
 	if deleteErr != nil {
 		slog.Error("delete passphrase message", "error", deleteErr)
-		b.notify(ctx, "⚠️ Не смог удалить сообщение с пароль-фразой - удали его сам прямо сейчас!")
+		b.notify(ctx, "⚠️ Сообщение с пароль-фразой не удалилось - необходимо удалить вручную прямо сейчас!")
 	}
 
 	switch {
 	case expired:
 		clear(passphrase)
-		b.notify(ctx, "⌛ Время на пароль-фразу вышло, нажми кнопку отправки ещё раз.")
+		b.notify(ctx, "⌛ Время на пароль-фразу вышло, нужна повторная отправка")
 	case refusal != "":
 		clear(passphrase)
 		b.notify(ctx, refusal)
@@ -166,7 +166,7 @@ func (b *Bot) cancelPending(ctx context.Context) {
 	if err := b.deleteMessage(ctx, b.cfg.OwnerID, p.promptID); err != nil {
 		slog.Error("delete passphrase prompt", "error", err)
 	}
-	b.notify(ctx, "Отменил, пароль-фразу больше не жду.")
+	b.notify(ctx, "Отменено, пароль-фраза больше не ожидается")
 }
 
 func isCancel(text string) bool {
@@ -187,7 +187,7 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 	// Запись в базу не отменяем даже при остановке бота: worklog уже в Jira, бот обязан о нём помнить
 	dbCtx := context.WithoutCancel(ctx)
 
-	status, err := b.send(ctx, "⏳ Начинаю отправку…", nil)
+	status, err := b.send(ctx, "⏳ Отправка…", nil)
 	if err != nil {
 		slog.Error("send status", "error", err)
 		return
@@ -200,7 +200,7 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 
 	w, err := b.loadWeek(ctx)
 	if err != nil || w.post.ID != p.postID || hashText(w.post.Text) != p.hash {
-		progress("Пост изменился после превью - ничего не отправил. Пришли /submit ещё раз.")
+		progress("Пост изменился после предпросмотра, ничего не отправлено. Свежий предпросмотр - /submit")
 		return
 	}
 	job := corp.Job{RequestApproval: p.approve, KnownPeriods: w.unapproved}
@@ -272,7 +272,7 @@ func renderOutcome(o corp.Outcome, runErr error) string {
 	if runErr == nil {
 		b.WriteString("✅ <b>Готово</b>\n")
 	} else {
-		fmt.Fprintf(&b, "❌ <b>Остановился:</b> %s\n", describeError(runErr))
+		fmt.Fprintf(&b, "❌ <b>Остановлено:</b> %s\n", describeError(runErr))
 	}
 
 	for _, r := range o.Worklogs {
@@ -281,14 +281,14 @@ func renderOutcome(o corp.Outcome, runErr error) string {
 		case corp.StatusCreated:
 			state = "записано"
 		case corp.StatusAlreadyInJira:
-			state = "уже было в Jira вручную, пропустил"
+			state = "уже было в Jira вручную, пропущено"
 			if r.InJira != r.Job.Duration {
 				state += fmt.Sprintf(". ⚠️ В Jira %s, в посте %s", parser.FormatDuration(r.InJira), parser.FormatDuration(r.Job.Duration))
 			}
 		case corp.StatusFailed:
 			state = "ошибка"
 		default:
-			state = "не дошёл"
+			state = "очередь не дошла"
 		}
 		fmt.Fprintf(&b, "• %s %s %s - %s\n", r.Job.Date.Format("02.01"), html.EscapeString(r.Job.IssueKey),
 			parser.FormatDuration(r.Job.Duration), state)
@@ -309,13 +309,13 @@ func describeError(err error) string {
 		return "пароль-фраза не подошла."
 	case isAuthError(err):
 		return "доступ не принят (" + html.EscapeString(err.Error()) + ").\n" +
-			"🔒 Отправка заблокирована, чтобы не словить капчу или блокировку учётки. Проверь доступы и пришли /unlock"
+			"🔒 Отправка заблокирована, чтобы не словить капчу или блокировку учётки. Снять блокировку после проверки доступов /unlock"
 	case errors.Is(err, jira.ErrUnknownResult):
-		return "Jira ответила непонятно - worklog мог записаться, проверь календарь."
+		return "нестандартный ответ от Jira, worklog мог записаться - нужна сверка с календарём"
 	case errors.Is(err, jira.ErrIssueNotFound):
-		return html.EscapeString(err.Error()) + " - проверь ключ задачи в посте."
+		return html.EscapeString(err.Error()) + " - возможно, ошибка в ключе задачи в посте"
 	case errors.Is(err, context.DeadlineExceeded):
-		return "не дождался ответа. Если ждал VPN - возможно, пуш не подтверждён."
+		return "истекло время ожидания. Вероятная причина - не подтверждён пуш Multifactor"
 	default:
 		return html.EscapeString(err.Error())
 	}
@@ -330,5 +330,5 @@ func (b *Bot) cmdUnlock(ctx context.Context) {
 		b.notify(ctx, "Блокировки нет.")
 		return
 	}
-	b.notify(ctx, "🔓 Блокировку снял. Если доступ снова не примут - заблокирую опять.")
+	b.notify(ctx, "🔓 Блокировка снята. При новой ошибке доступа отправка снова заблокируется")
 }
