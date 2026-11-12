@@ -249,7 +249,7 @@ func renderPreview(in previewInput) string {
 		case d.Mismatch:
 			mark = "⚠️"
 		case d.Worklogs > 0 && d.Submitted == d.Worklogs:
-			mark = "✔️"
+			mark = "☑️"
 		case d.Submitted > 0:
 			mark = "🔸"
 		case d.Worklogs > 0 && d.Date.Equal(in.Today):
@@ -266,10 +266,11 @@ func renderPreview(in previewInput) string {
 		case d.Kind == calendar.Short:
 			note = " <i>(сокращённый)</i>"
 		}
-		// Пустой день - просто прочерк: "0ч" читался бы как сознательно записанный ноль
-		total := "-"
+		// У пустого дня времени нет совсем: "0ч" читался бы как сознательно записанный ноль, а пустоту
+		// и так показывает значок
+		total := ""
 		if d.Total > 0 {
-			total = "- " + parser.FormatDuration(d.Total)
+			total = " - " + parser.FormatDuration(d.Total)
 		}
 		if d.shortfall() > 0 {
 			total += " из " + parser.FormatDuration(d.Kind.Norm())
@@ -283,7 +284,7 @@ func renderPreview(in previewInput) string {
 		if d.Date.Equal(in.Today) {
 			tail += " · сегодня"
 		}
-		fmt.Fprintf(&b, "%s %s %s %s%s%s\n", mark, weekdays[d.Date.Weekday()], d.Date.Format("02.01"), total, note, tail)
+		fmt.Fprintf(&b, "%s %s %s%s%s%s\n", mark, weekdays[d.Date.Weekday()], d.Date.Format("02.01"), total, note, tail)
 		if len(d.Issues) > 0 {
 			fmt.Fprintf(&b, "    <i>%s</i>\n", html.EscapeString(strings.Join(d.Issues, ", ")))
 		}

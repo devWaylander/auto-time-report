@@ -716,7 +716,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	}
 
 	b.onMessage(ctx, dm("/status"))
-	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "✔️ Вт 20.10 - 8ч") || strings.Contains(preview, "К записи") {
+	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "☑️ Вт 20.10 - 8ч") || strings.Contains(preview, "К записи") {
 		t.Fatalf("day is not fully written after submit:\n%s", preview)
 	}
 }
