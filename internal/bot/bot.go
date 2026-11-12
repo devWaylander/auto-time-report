@@ -76,6 +76,10 @@ type Bot struct {
 	attempts []time.Time
 	// Когда последний раз предупреждали, что токеном бота пользуется кто-то ещё
 	conflictAlertAt time.Time
+	// Ссылка на чат с ботом для кнопки под постом; спрашивается у Telegram один раз
+	botURL string
+	// Telegram не дал повесить кнопку под постом: до перезапуска больше не пытаемся
+	buttonOff bool
 }
 
 func New(cfg Config, st *store.Store, cal Calendar, runner Runner, userID int64) (*Bot, error) {
@@ -292,9 +296,10 @@ func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited boo
 	switch {
 	case err == nil:
 		b.updateKnownPost(ctx, post)
+		b.ensureBotButton(ctx, msg)
 	case errors.Is(err, store.ErrNotFound):
-		if parser.LooksLikePost(post.Text) {
-			b.considerNewPost(ctx, post)
+		if parser.LooksLikePost(post.Text) && b.considerNewPost(ctx, post) {
+			b.ensureBotButton(ctx, msg)
 		}
 	default:
 		slog.Error("find week post", "error", err)
@@ -450,30 +455,94 @@ func emptyDatesWarning(report parser.Report) string {
 	}
 }
 
-func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) {
+// considerNewPost принимает новое сообщение как пост недели, если оно подходит; true - принято
+func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) bool {
 	report, err := parser.Parse(post.Text, b.cfg.DefaultIssue, b.now())
 	if err != nil {
-		return
+		return false
 	}
 	current, err := b.store.LatestWeekPost(ctx, b.userID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 	case err != nil:
 		slog.Error("load week post", "error", err)
-		return
+		return false
 	default:
 		if !weekStart(report.Dates()[0]).After(b.lastWeekOf(current)) {
-			return
+			return false
 		}
 	}
 	saved, _, err := b.store.SaveWeekPost(ctx, post)
 	if err != nil {
 		slog.Error("save week post", "error", err)
 		b.notify(ctx, "⚠️ Пост недели не сохранён, подробности в логах бота")
-		return
+		return false
 	}
 	// Ошибок в принятом посте нет, но предупреждения (пустая дата) уже могут быть
 	b.onPostChanged(ctx, saved)
+	return true
+}
+
+// botLink - ссылка на чат с ботом. Имя бота спрашивается у Telegram один раз
+func (b *Bot) botLink(ctx context.Context) (string, error) {
+	b.mu.Lock()
+	link := b.botURL
+	b.mu.Unlock()
+	if link != "" {
+		return link, nil
+	}
+	me, err := b.api.GetMe(ctx)
+	if err != nil {
+		return "", errors.New(b.redact(err.Error()))
+	}
+	if me.Username == "" {
+		return "", errors.New("telegram returned no bot username")
+	}
+	link = "https://t.me/" + me.Username
+	b.mu.Lock()
+	b.botURL = link
+	b.mu.Unlock()
+	return link, nil
+}
+
+// ensureBotButton вешает под постом недели кнопку возврата в бота, если её там ещё нет. Своя правка кнопки
+// приходит боту как правка поста, уже с кнопкой: повторно её не вешаем, поэтому цикла нет. Telegram может
+// не разрешить (у бота нет права редактировать сообщения канала): тогда бот пишет в лог и до перезапуска
+// больше не пытается
+func (b *Bot) ensureBotButton(ctx context.Context, msg *models.Message) {
+	b.mu.Lock()
+	off := b.buttonOff
+	b.mu.Unlock()
+	if off {
+		return
+	}
+	link, err := b.botLink(ctx)
+	if err != nil {
+		slog.Warn("bot link for post button", "error", err)
+		return
+	}
+	if msg.ReplyMarkup != nil {
+		for _, row := range msg.ReplyMarkup.InlineKeyboard {
+			for _, btn := range row {
+				if btn.URL == link {
+					return
+				}
+			}
+		}
+	}
+	_, err = b.api.EditMessageReplyMarkup(ctx, &tgbot.EditMessageReplyMarkupParams{
+		ChatID:    msg.Chat.ID,
+		MessageID: msg.ID,
+		ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+			{{Text: "🤖 В бота", URL: link}},
+		}},
+	})
+	if err != nil && !strings.Contains(err.Error(), "message is not modified") {
+		slog.Warn("attach bot button to week post", "error", b.redact(err.Error()))
+		b.mu.Lock()
+		b.buttonOff = true
+		b.mu.Unlock()
+	}
 }
 
 // lastWeekOf - понедельник последней недели в посте; если пост не разбирается, неделя его публикации

@@ -33,6 +33,8 @@ type fakeTelegram struct {
 	nextID int
 	// Правка сообщения не проходит: его будто удалили в чате
 	editsFail bool
+	// Кнопку под постом канала повесить нельзя: у бота нет права редактировать сообщения
+	markupFails bool
 }
 
 func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -48,8 +50,13 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.calls = append(f.calls, apiCall{method: method, params: params})
 	f.nextID++
 	id := f.nextID
-	editsFail := f.editsFail
+	editsFail, markupFails := f.editsFail, f.markupFails
 	f.mu.Unlock()
+
+	if markupFails && method == "editMessageReplyMarkup" {
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message can't be edited"})
+		return
+	}
 
 	if editsFail && method == "editMessageText" {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message to edit not found"})
@@ -137,13 +144,25 @@ func newTelegramBot(t *testing.T) (*Bot, *fakeTelegram, *fakeRunner, *store.Stor
 		t.Fatal(err)
 	}
 	b.clock = fixedClock
+	// Имя бота как будто уже спросили у Telegram: getMe не мешается в проверках вызовов
+	b.botURL = testBotURL
 	tg.take()
 	return b, tg, runner, st
 }
 
 var nextMessageID = 100
 
+const testBotURL = "https://t.me/bot"
+
+// channelPost - сообщение канала. Кнопка возврата в бота под ним уже есть, как у поста недели после первой
+// правки: тесты про неё используют bareChannelPost
 func channelPost(text string, posted time.Time) *models.Message {
+	m := bareChannelPost(text, posted)
+	m.ReplyMarkup = &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{{Text: "🤖 В бота", URL: testBotURL}}}}
+	return m
+}
+
+func bareChannelPost(text string, posted time.Time) *models.Message {
 	nextMessageID++
 	return &models.Message{ID: nextMessageID, Date: int(posted.Unix()), Chat: models.Chat{ID: -100}, Text: text}
 }
@@ -776,5 +795,41 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	b.onMessage(ctx, dm("/status"))
 	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "☑️ Вт 20.10 - 8ч") || strings.Contains(preview, "К записи") {
 		t.Fatalf("day is not fully written after submit:\n%s", preview)
+	}
+}
+
+// Под постом недели бот вешает кнопку возврата в бота - один раз, только под постом недели. Telegram не дал -
+// больше не пытается
+func TestBotButtonUnderWeekPost(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	ctx := context.Background()
+
+	b.onChannelPost(ctx, bareChannelPost("Купить молоко", day(10, 19)), false)
+	if calls := tg.take(); len(calls) != 0 {
+		t.Fatalf("note got a button: %+v", calls)
+	}
+	week := bareChannelPost("19.10\nРабота - 8ч", day(10, 19))
+	b.onChannelPost(ctx, week, false)
+	calls := tg.take()
+	if countMethod(calls, "editMessageReplyMarkup") != 1 || lastParam(calls, "editMessageReplyMarkup", "message_id") != fmt.Sprint(week.ID) ||
+		!strings.Contains(lastParam(calls, "editMessageReplyMarkup", "reply_markup"), testBotURL) {
+		t.Fatalf("week post got no button: %+v", calls)
+	}
+	// Правка уже с кнопкой - повторно не вешаем
+	withButton := edit(week, "19.10\nРабота - 7ч", day(10, 20))
+	withButton.ReplyMarkup = channelPost("", day(10, 20)).ReplyMarkup
+	b.onChannelPost(ctx, withButton, true)
+	if calls := tg.take(); countMethod(calls, "editMessageReplyMarkup") != 0 {
+		t.Fatalf("button attached again: %+v", calls)
+	}
+	// Telegram не дал повесить кнопку - бот больше не пытается
+	tg.mu.Lock()
+	tg.markupFails = true
+	tg.mu.Unlock()
+	b.onChannelPost(ctx, edit(week, "19.10\nРабота - 6ч", day(10, 21)), true)
+	tg.take()
+	b.onChannelPost(ctx, edit(week, "19.10\nРабота - 5ч", day(10, 22)), true)
+	if calls := tg.take(); countMethod(calls, "editMessageReplyMarkup") != 0 {
+		t.Fatalf("bot keeps trying after a refusal: %+v", calls)
 	}
 }
