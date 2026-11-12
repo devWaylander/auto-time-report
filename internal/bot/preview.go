@@ -252,6 +252,9 @@ func renderPreview(in previewInput) string {
 			mark = "✔️"
 		case d.Submitted > 0:
 			mark = "🔸"
+		case d.Worklogs > 0 && d.Date.Equal(in.Today):
+			// Сегодняшний день ещё дописывается
+			mark = "✏️"
 		case d.Worklogs > 0:
 			mark = "🔹"
 		}

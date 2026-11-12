@@ -492,3 +492,40 @@ func TestRenderShortfallTwoWeeks(t *testing.T) {
 		t.Errorf("two-week shortfall:\n%s", text)
 	}
 }
+
+// Сегодняшний день с записями, ещё не в Jira, помечен карандашом: он ещё дописывается
+func TestRenderTodayPencil(t *testing.T) {
+	text := renderPreview(previewInput{Today: day(10, 21), Pending: 2, Days: []dayLine{
+		{Date: day(10, 20), Kind: calendar.Working, Total: 8 * time.Hour, Worklogs: 1},
+		{Date: day(10, 21), Kind: calendar.Working, Total: 8 * time.Hour, Worklogs: 1},
+		{Date: day(10, 22), Kind: calendar.Working},
+	}})
+	for _, want := range []string{"🔹 Вт 20.10 - 8ч\n", "✏️ Ср 21.10 - 8ч · сегодня\n", "▫️ Чт 22.10 -\n"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("preview has no %q:\n%s", want, text)
+		}
+	}
+}
+
+// День с двумя задачами, одна уже в Jira: день помечен как записанный частично, к записи - вторая
+func TestPreviewPartialDay(t *testing.T) {
+	b, st := newTestBot(t, nil)
+	ctx := context.Background()
+	post := "20.10\nРабота - 6ч\n\nXYZ-101\n20.10\nСозвон - 2ч"
+	saved, _, err := st.SaveWeekPost(ctx, store.WeekPost{UserID: b.userID, ChatID: -100, MessageID: 1, Text: post, PostedAt: day(10, 20)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SaveSubmission(ctx, store.Submission{
+		UserID: b.userID, WeekPostID: saved.ID, IssueKey: "ABC-1", WorkDate: day(10, 20),
+		Duration: 6 * time.Hour, Comment: "x", WorklogID: 1, PeriodID: 228,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	text, _ := b.buildPreview(ctx, false)
+	for _, want := range []string{"🔸 Вт 20.10 - 8ч\n", "ABC-1 6ч, XYZ-101 2ч", "К записи в Jira: 1"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("preview has no %q:\n%s", want, text)
+		}
+	}
+}
