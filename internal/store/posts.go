@@ -49,13 +49,6 @@ func (s *Store) WeekPostByMessage(ctx context.Context, chatID, messageID int64) 
 		FROM week_posts WHERE chat_id = ? AND message_id = ?`, chatID, messageID))
 }
 
-// WeekPostByID ищет сохранённый пост по ID, ErrNotFound если такого нет
-func (s *Store) WeekPostByID(ctx context.Context, id int64) (WeekPost, error) {
-	return scanWeekPost(s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, chat_id, message_id, text, posted_at, edited_at
-		FROM week_posts WHERE id = ?`, id))
-}
-
 // LatestWeekPost возвращает самый свежий пост пользователя, ErrNotFound если постов нет
 func (s *Store) LatestWeekPost(ctx context.Context, userID int64) (WeekPost, error) {
 	return scanWeekPost(s.db.QueryRowContext(ctx, `

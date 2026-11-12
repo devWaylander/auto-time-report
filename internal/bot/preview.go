@@ -22,7 +22,7 @@ import (
 
 const (
 	submitPrefix = "s:"
-	// "Обновить" под уведомлением о проблемах в посте: n:<ID поста>
+	// "Обновить" под уведомлением о посте из прошлых версий бота: n:<ID поста>
 	noticePrefix = "n:"
 	hideData     = "x"
 	// Превью по кнопке: viewStatus и viewSubmit перерисовывают это же сообщение, viewNew присылает новое
@@ -77,6 +77,11 @@ func (b *Bot) loadWeek(ctx context.Context) (weekState, error) {
 	if err != nil {
 		return weekState{}, err
 	}
+	return b.loadWeekOf(ctx, post)
+}
+
+// loadWeekOf - то же для конкретного поста
+func (b *Bot) loadWeekOf(ctx context.Context, post store.WeekPost) (weekState, error) {
 	report, err := parser.Parse(post.Text, b.cfg.DefaultIssue, b.now())
 	if err != nil {
 		return weekState{post: post}, err
@@ -113,50 +118,65 @@ func (b *Bot) sendPreview(ctx context.Context, submit bool) {
 	}
 }
 
-// showPreview показывает превью в сообщении messageID или новым сообщением (messageID = 0), header - строка
-// над ним. Если в посте ошибки, вместо превью показывается уведомление о посте: ошибки всегда в одном
-// сообщении, которое бот обновит или удалит после исправления
-func (b *Bot) showPreview(ctx context.Context, submit bool, messageID int, header string) error {
-	w, err := b.loadWeek(ctx)
-	if err != nil && w.post.ID != 0 {
-		return b.showErrorNotice(ctx, w.post, header, messageID)
-	}
-	text, markup := b.renderWeek(ctx, w, err, submit)
-	if header != "" {
-		text = header + "\n\n" + text
-	}
-	if messageID != 0 {
-		b.edit(ctx, messageID, text, markup)
-		return nil
-	}
-	_, err = b.send(ctx, text, markup)
-	return err
-}
-
 func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.ReplyMarkup) {
 	w, err := b.loadWeek(ctx)
-	return b.renderWeek(ctx, w, err, submit)
+	v := b.viewOf(ctx, w, err, submit, "")
+	return v.text, v.markup
 }
 
-// renderWeek - текст и кнопки превью по результату loadWeek
-func (b *Bot) renderWeek(ctx context.Context, w weekState, err error, submit bool) (string, models.ReplyMarkup) {
+// weekView - сообщение о посте: превью с предупреждениями под ним или ошибки разбора
+type weekView struct {
+	text     string
+	markup   models.ReplyMarkup
+	problems string // ошибки разбора или предупреждения; пусто - с постом всё в порядке
+	live     bool   // сообщение про конкретный пост: его можно держать живым
+}
+
+// viewOf собирает сообщение по результату loadWeek; header - строка над ним
+func (b *Bot) viewOf(ctx context.Context, w weekState, err error, submit bool, header string) weekView {
 	// Даже без превью оставляем "Обновить": поправил пост - нажал, не набирая команду заново
 	keys := previewKeys{Submit: submit, PostURL: postURL(w.post.ChatID, w.post.MessageID)}
+	withHeader := func(text string) string {
+		if header == "" {
+			return text
+		}
+		return header + "\n\n" + text
+	}
 	switch {
 	case errors.Is(err, errNoPost):
-		return "Поста текущей недели в канале пока нет", previewKeyboard(keys)
+		return weekView{text: "Поста текущей недели в канале пока нет", markup: previewKeyboard(keys)}
 	case err != nil && w.post.ID != 0:
-		return "⚠️ В посте недели ошибки, предпросмотр не собран:\n" + formatParseErrors(err), previewKeyboard(keys)
+		problems := "⚠️ В посте недели ошибки:\n" + formatParseErrors(err)
+		return weekView{text: withHeader(problems), markup: previewKeyboard(keys), problems: problems, live: true}
 	case err != nil:
 		slog.Error("load week", "error", err)
-		return "⚠️ Предпросмотр не собран, подробности в логах бота", previewKeyboard(keys)
+		return weekView{text: "⚠️ Предпросмотр не собран, подробности в логах бота", markup: previewKeyboard(keys)}
 	}
 
 	in := b.previewInput(ctx, w)
 	in.Submit = submit
 	keys.PostID, keys.Hash = w.post.ID, hashText(w.post.Text)
 	keys.Pending, keys.Unapproved, keys.Filled = in.Pending, in.Unapproved, !in.Unfilled
-	return renderPreview(in), previewKeyboard(keys)
+	text := renderPreview(in)
+	problems := b.warnings(ctx, w.report)
+	if problems != "" {
+		text += "\n\n" + problems
+	}
+	return weekView{text: withHeader(text), markup: previewKeyboard(keys), problems: problems, live: true}
+}
+
+// warnings - предупреждения по разобранному посту: даты без записей и правки дней, уже записанных в Jira
+func (b *Bot) warnings(ctx context.Context, report parser.Report) string {
+	var parts []string
+	if warning := emptyDatesWarning(report); warning != "" {
+		parts = append(parts, warning)
+	}
+	if warning, err := b.changedSubmitted(ctx, report); err != nil {
+		slog.Error("compare with submitted", "error", err)
+	} else if warning != "" {
+		parts = append(parts, warning)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // dayLine - строка превью за один день

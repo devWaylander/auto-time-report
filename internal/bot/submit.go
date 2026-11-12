@@ -289,6 +289,8 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 	if _, err := b.send(dbCtx, renderOutcome(outcome, runErr), statusKeyboard("")); err != nil {
 		slog.Error("send outcome", "error", err)
 	}
+	// В Jira теперь другое: живое сообщение поста показывает свежее состояние
+	b.refreshLive(dbCtx, w.post)
 }
 
 func isAuthError(err error) bool {

@@ -443,7 +443,7 @@ func TestPreviewErrorsHavePostButton(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, markup := b.buildPreview(ctx, false)
-	if !strings.HasPrefix(text, "⚠️ В посте недели ошибки, предпросмотр не собран:\n") || strings.Contains(text, "<a ") {
+	if !strings.HasPrefix(text, "⚠️ В посте недели ошибки:\n") || strings.Contains(text, "<a ") {
 		t.Errorf("errors text:\n%s", text)
 	}
 	rows := markup.(models.InlineKeyboardMarkup).InlineKeyboard
