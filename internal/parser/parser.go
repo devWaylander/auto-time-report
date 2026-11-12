@@ -178,7 +178,7 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 				continue
 			}
 			if date.IsZero() {
-				fail(n, date, line, "запись без даты: перед ней должна быть строка вида 19.10")
+				fail(n, date, line, `запись без даты: перед ней должна быть строка вида "DD.MM"`)
 				continue
 			}
 			if issue == "" {
