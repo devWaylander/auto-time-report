@@ -22,6 +22,8 @@ import (
 
 const (
 	submitPrefix = "s:"
+	// "Обновить" под уведомлением о проблемах в посте: n:<ID поста>
+	noticePrefix = "n:"
 	hideData     = "x"
 	// Превью по кнопке: viewStatus и viewSubmit перерисовывают это же сообщение, viewNew присылает новое
 	viewStatus = "v:status"

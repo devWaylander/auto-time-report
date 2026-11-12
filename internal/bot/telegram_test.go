@@ -195,7 +195,7 @@ func TestChannelNotesDoNotReplaceWeekPost(t *testing.T) {
 	if texts := tg.sent(calls); len(texts) != 1 || !strings.Contains(texts[0], "ошибки") {
 		t.Fatalf("expected one error message, got %q", texts)
 	}
-	if markup := lastParam(calls, "sendMessage", "reply_markup"); !strings.Contains(markup, viewStatus) {
+	if markup := lastParam(calls, "sendMessage", "reply_markup"); !strings.Contains(markup, noticePrefix) {
 		t.Errorf("error message has no refresh button: %s", markup)
 	}
 }
@@ -225,7 +225,7 @@ func TestPostNotice(t *testing.T) {
 	if texts := tg.sent(calls); len(texts) != 1 || texts[0] != "⚠️ 20.10: дата есть, записей под ней нет" {
 		t.Fatalf("expected an empty date notice, got %q", texts)
 	}
-	if markup := lastParam(calls, "sendMessage", "reply_markup"); !strings.Contains(markup, viewStatus) {
+	if markup := lastParam(calls, "sendMessage", "reply_markup"); !strings.Contains(markup, noticePrefix) {
 		t.Errorf("notice has no refresh button: %s", markup)
 	}
 	// Та же пустая дата при следующей правке - без повтора
@@ -248,16 +248,86 @@ func TestPostNotice(t *testing.T) {
 		t.Fatalf("fixed post: %+v", calls)
 	}
 
-	// "Обновить" на уведомлении делает его статусом: после исправления его не удалить
-	editTo("19.10\nРабота")
-	id, _ := strconv.Atoi(noticeID())
+	// "Обновить" на уведомлении пересчитывает его на месте и не теряет: следующая правка его удалит
+	calls = editTo("19.10\nРабота")
+	markup := lastParam(calls, "sendMessage", "reply_markup")
+	if !strings.Contains(markup, noticePrefix) || strings.Contains(markup, viewStatus) {
+		t.Fatalf("notice refresh button = %s", markup)
+	}
+	third := noticeID()
+	pressNotice := func() []apiCall {
+		id, _ := strconv.Atoi(noticeID())
+		var post int64
+		for pid := range b.notices {
+			post = pid
+		}
+		b.onCallback(ctx, &models.CallbackQuery{
+			ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: fmt.Sprintf("%s%d", noticePrefix, post),
+			Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: id}},
+		})
+		return tg.take()
+	}
+	calls = pressNotice()
+	if lastParam(calls, "editMessageText", "message_id") != third || !strings.Contains(lastParam(calls, "editMessageText", "text"), "ошибки") {
+		t.Fatalf("notice was not refreshed in place: %+v", calls)
+	}
+	if !strings.Contains(lastParam(calls, "editMessageText", "reply_markup"), noticePrefix) || noticeID() != third {
+		t.Fatalf("refreshed notice lost its button or tracking: %+v", calls)
+	}
+	calls = editTo("19.10\nРабота - 8ч")
+	if lastParam(calls, "deleteMessage", "message_id") != third || len(tg.sent(calls)) != 0 {
+		t.Fatalf("refreshed notice not deleted after the fix: %+v", calls)
+	}
+
+	// После перезапуска бот уведомление не помнит: исправленный пост его не удалит, но "Обновить"
+	// на нём покажет статус
+	editTo("19.10\nРабота\n\n20.10")
+	stale, _ := strconv.Atoi(noticeID())
+	b.notices = nil
+	editTo("19.10\nРабота - 8ч\n\n20.10\nРабота - 8ч")
 	b.onCallback(ctx, &models.CallbackQuery{
-		ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: viewStatus,
-		Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: id}},
+		ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: fmt.Sprintf("%s%d", noticePrefix, saved(t, b).ID),
+		Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: stale}},
 	})
+	calls = tg.take()
+	if lastParam(calls, "editMessageText", "message_id") != fmt.Sprint(stale) ||
+		!strings.Contains(lastParam(calls, "editMessageText", "text"), "Неделя") || len(b.notices) != 0 {
+		t.Fatalf("clean post refresh did not show the status: %+v", calls)
+	}
+}
+
+func saved(t *testing.T, b *Bot) store.WeekPost {
+	t.Helper()
+	p, err := b.store.LatestWeekPost(context.Background(), b.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// Правка известного поста принимается, даже если первая строка перестала быть датой или ключом задачи
+func TestKnownPostEditWithHeading(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	ctx := context.Background()
+	week := channelPost("19.10\nРабота - 8ч", day(10, 19))
+	b.onChannelPost(ctx, week, false)
 	tg.take()
-	if calls := editTo("19.10\nРабота - 8ч"); countMethod(calls, "deleteMessage") != 0 || len(calls) != 0 {
-		t.Fatalf("refreshed notice was touched: %+v", calls)
+
+	b.onChannelPost(ctx, edit(week, "Неделя 43\n\n19.10\nРабота - 8ч", day(10, 20)), true)
+	if latestText(t, b) != "Неделя 43\n\n19.10\nРабота - 8ч" {
+		t.Fatal("edit with a heading was ignored")
+	}
+	if texts := tg.sent(tg.take()); len(texts) != 1 || !strings.Contains(texts[0], "ошибки") {
+		t.Fatalf("expected an error notice, got %q", texts)
+	}
+}
+
+// Новый пост принимается без ошибок, но с пустой датой - об этом сразу уведомление
+func TestNewPostWithEmptyDateNotice(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	b.onChannelPost(context.Background(), channelPost("19.10\nРабота - 8ч\n\n20.10", day(10, 19)), false)
+	if texts := tg.sent(tg.take()); len(texts) != 1 || !strings.Contains(texts[0], "20.10: дата есть") {
+		t.Fatalf("expected an empty date notice, got %q", texts)
 	}
 }
 

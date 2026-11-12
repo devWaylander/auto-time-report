@@ -9,6 +9,7 @@ import (
 	"html"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -257,11 +258,12 @@ func (b *Bot) answer(ctx context.Context, cq *models.CallbackQuery, text string,
 	}
 }
 
-// onChannelPost следит за постом недели. Правки уже известного поста принимаются всегда. Новое сообщение
-// становится постом недели, только если разбирается без ошибок и относится к более поздней неделе, чем текущий
-// пост: так заметки в канале его не перехватят. Остальные сообщения молча игнорируются и в базу не попадают
+// onChannelPost следит за постом недели. Правки уже известного поста принимаются всегда, даже если первая
+// строка перестала быть датой или ключом: об этом скажет уведомление. Новое сообщение становится постом недели,
+// только если похоже на пост, разбирается без ошибок и относится к более поздней неделе, чем текущий пост:
+// так заметки в канале его не перехватят. Остальные сообщения молча игнорируются и в базу не попадают
 func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited bool) {
-	if msg.Chat.ID != b.cfg.ChannelID || !parser.LooksLikePost(msg.Text) {
+	if msg.Chat.ID != b.cfg.ChannelID || msg.Text == "" {
 		return
 	}
 	// Хендлеры работают параллельно: апдейты канала разбираем по одному, чтобы решения не перемешались
@@ -284,7 +286,9 @@ func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited boo
 	case err == nil:
 		b.updateKnownPost(ctx, post)
 	case errors.Is(err, store.ErrNotFound):
-		b.considerNewPost(ctx, post)
+		if parser.LooksLikePost(post.Text) {
+			b.considerNewPost(ctx, post)
+		}
 	default:
 		slog.Error("find week post", "error", err)
 	}
@@ -346,8 +350,7 @@ func (b *Bot) showNotice(ctx context.Context, post store.WeekPost, text string) 
 	if text == "" {
 		return
 	}
-	// "Обновить" перерисует уведомление в статус недели, дальше бот его не трогает
-	msg, err := b.send(ctx, text, previewKeyboard(previewKeys{PostURL: postURL(post.ChatID, post.MessageID)}))
+	msg, err := b.send(ctx, text, noticeKeyboard(post))
 	if err != nil {
 		slog.Error("send post notice", "error", err)
 		return
@@ -358,15 +361,52 @@ func (b *Bot) showNotice(ctx context.Context, post store.WeekPost, text string) 
 	b.notices[post.ID] = postNotice{messageID: msg.ID, text: text}
 }
 
-// forgetNotice - уведомление стало статусом недели по кнопке "Обновить": удалять его больше нельзя
-func (b *Bot) forgetNotice(messageID int) {
+// noticeKeyboard - кнопки уведомления: "Обновить" пересчитывает именно его, а не присылает статус
+func noticeKeyboard(post store.WeekPost) models.ReplyMarkup {
+	row := append([]models.InlineKeyboardButton{
+		{Text: "🔄 Обновить", CallbackData: fmt.Sprintf("%s%d", noticePrefix, post.ID)},
+	}, postButton(postURL(post.ChatID, post.MessageID))...)
+	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}}
+}
+
+// onNoticeRefresh - "Обновить" под уведомлением. Пока с постом что-то не так, уведомление пересчитывается
+// на месте; когда всё в порядке, на его месте появляется статус недели и бот его больше не трогает
+func (b *Bot) onNoticeRefresh(ctx context.Context, cq *models.CallbackQuery, messageID int) {
+	id, err := strconv.ParseInt(strings.TrimPrefix(cq.Data, noticePrefix), 10, 64)
+	if err != nil || messageID == 0 {
+		b.answer(ctx, cq, "Кнопка устарела", false)
+		return
+	}
 	b.postMu.Lock()
 	defer b.postMu.Unlock()
-	for id, n := range b.notices {
-		if n.messageID == messageID {
-			delete(b.notices, id)
+	post, err := b.store.WeekPostByID(ctx, id)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			slog.Error("load week post", "error", err)
+		}
+		b.answer(ctx, cq, "Кнопка устарела", false)
+		return
+	}
+	b.answer(ctx, cq, "Обновлено", false)
+
+	text := b.noticeText(ctx, post)
+	if cur, ok := b.notices[post.ID]; ok && cur.messageID != messageID {
+		// Нажали старое уведомление, которое не удалось удалить: оставляем одно, нажатое
+		if err := b.deleteMessage(ctx, b.cfg.OwnerID, cur.messageID); err != nil {
+			slog.Warn("delete post notice", "error", err)
 		}
 	}
+	delete(b.notices, post.ID)
+	if text == "" {
+		status, markup := b.buildPreview(ctx, false)
+		b.edit(ctx, messageID, status, markup)
+		return
+	}
+	b.edit(ctx, messageID, text, noticeKeyboard(post))
+	if b.notices == nil {
+		b.notices = map[int64]postNotice{}
+	}
+	b.notices[post.ID] = postNotice{messageID: messageID, text: text}
 }
 
 // emptyDatesWarning - предупреждение о датах без записей. Это не ошибка: день может быть ещё не дописан
@@ -401,10 +441,14 @@ func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) {
 			return
 		}
 	}
-	if _, _, err := b.store.SaveWeekPost(ctx, post); err != nil {
+	saved, _, err := b.store.SaveWeekPost(ctx, post)
+	if err != nil {
 		slog.Error("save week post", "error", err)
 		b.notify(ctx, "⚠️ Пост недели не сохранён, подробности в логах бота")
+		return
 	}
+	// Ошибок в принятом посте нет, но предупреждения (пустая дата) уже могут быть
+	b.showNotice(ctx, saved, b.noticeText(ctx, saved))
 }
 
 // lastWeekOf - понедельник последней недели в посте; если пост не разбирается, неделя его публикации
@@ -521,6 +565,8 @@ func (b *Bot) onCallback(ctx context.Context, cq *models.CallbackQuery) {
 		b.onSubmitButton(ctx, cq, messageID)
 	case strings.HasPrefix(cq.Data, settingsPrefix):
 		b.onSettingsButton(ctx, cq, messageID)
+	case strings.HasPrefix(cq.Data, noticePrefix):
+		b.onNoticeRefresh(ctx, cq, messageID)
 	case cq.Data == viewStatus || cq.Data == viewSubmit:
 		b.answer(ctx, cq, "Обновлено", false)
 		text, markup := b.buildPreview(ctx, cq.Data == viewSubmit)
@@ -528,7 +574,6 @@ func (b *Bot) onCallback(ctx context.Context, cq *models.CallbackQuery) {
 			b.sendPreview(ctx, cq.Data == viewSubmit)
 			return
 		}
-		b.forgetNotice(messageID)
 		b.edit(ctx, messageID, text, markup)
 	case cq.Data == viewNew:
 		b.answer(ctx, cq, "", false)
