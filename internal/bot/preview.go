@@ -108,15 +108,39 @@ func (b *Bot) loadWeek(ctx context.Context) (weekState, error) {
 
 // sendPreview присылает превью недели; submit - с кнопками отправки
 func (b *Bot) sendPreview(ctx context.Context, submit bool) {
-	text, markup := b.buildPreview(ctx, submit)
-	if _, err := b.send(ctx, text, markup); err != nil {
+	if err := b.showPreview(ctx, submit, 0, ""); err != nil {
 		slog.Error("send preview", "error", err)
 	}
 }
 
-func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.ReplyMarkup) {
-	// Даже без превью оставляем "Обновить": поправил пост - нажал, не набирая команду заново
+// showPreview показывает превью в сообщении messageID или новым сообщением (messageID = 0), header - строка
+// над ним. Если в посте ошибки, вместо превью показывается уведомление о посте: ошибки всегда в одном
+// сообщении, которое бот обновит или удалит после исправления
+func (b *Bot) showPreview(ctx context.Context, submit bool, messageID int, header string) error {
 	w, err := b.loadWeek(ctx)
+	if err != nil && w.post.ID != 0 {
+		return b.showErrorNotice(ctx, w.post, header, messageID)
+	}
+	text, markup := b.renderWeek(ctx, w, err, submit)
+	if header != "" {
+		text = header + "\n\n" + text
+	}
+	if messageID != 0 {
+		b.edit(ctx, messageID, text, markup)
+		return nil
+	}
+	_, err = b.send(ctx, text, markup)
+	return err
+}
+
+func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.ReplyMarkup) {
+	w, err := b.loadWeek(ctx)
+	return b.renderWeek(ctx, w, err, submit)
+}
+
+// renderWeek - текст и кнопки превью по результату loadWeek
+func (b *Bot) renderWeek(ctx context.Context, w weekState, err error, submit bool) (string, models.ReplyMarkup) {
+	// Даже без превью оставляем "Обновить": поправил пост - нажал, не набирая команду заново
 	keys := previewKeys{Submit: submit, PostURL: postURL(w.post.ChatID, w.post.MessageID)}
 	switch {
 	case errors.Is(err, errNoPost):
@@ -444,7 +468,5 @@ func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
 
 // WeeklyPreview - напоминание notify: превью недели с кнопками
 func (b *Bot) WeeklyPreview(ctx context.Context) error {
-	text, markup := b.buildPreview(ctx, true)
-	_, err := b.send(ctx, "🗓 Конец рабочей недели, подготовлен предпросмотр перед отправкой\n\n"+text, markup)
-	return err
+	return b.showPreview(ctx, true, 0, "🗓 Конец рабочей недели, подготовлен предпросмотр перед отправкой")
 }

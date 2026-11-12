@@ -310,10 +310,11 @@ func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) {
 	b.showNotice(ctx, saved, b.noticeText(ctx, saved))
 }
 
-// postNotice - уведомление о проблемах в посте: у каждого поста не больше одного
+// postNotice - живое сообщение поста: пока с постом что-то не так, это уведомление о проблемах, после
+// исправления - статус недели на его месте. У каждого поста не больше одного
 type postNotice struct {
 	messageID int
-	text      string
+	text      string // текст уведомления; пусто - сообщение сейчас показывает статус
 }
 
 // noticeText - всё, что сейчас не так с постом: ошибки разбора или предупреждения. Пусто - всё в порядке
@@ -334,22 +335,26 @@ func (b *Bot) noticeText(ctx context.Context, post store.WeekPost) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// showNotice держит у поста одно уведомление. Текст не изменился - бот молчит. Изменился - старое
-// удаляется и приходит новое, внизу чата и с пушем. Всё исправлено - старое просто удаляется
+// showNotice держит у поста одно живое сообщение. Проблемы не изменились - бот молчит. Изменились - старое
+// сообщение удаляется и приходит новое уведомление, внизу чата и с пушем. Всё исправлено - сообщение
+// на месте становится статусом недели и дальше обновляется с каждой правкой, без пушей
 func (b *Bot) showNotice(ctx context.Context, post store.WeekPost, text string) {
-	old := b.notices[post.ID]
-	if text == old.text {
+	old, tracked := b.notices[post.ID]
+	switch {
+	case !tracked && text == "":
+		return
+	case tracked && text == "":
+		b.showStatusInNotice(ctx, post, old.messageID)
+		return
+	case tracked && text == old.text:
 		return
 	}
-	if old.messageID != 0 {
+	if tracked {
 		if err := b.deleteMessage(ctx, b.cfg.OwnerID, old.messageID); err != nil {
 			slog.Warn("delete post notice", "error", err)
 		}
 	}
 	delete(b.notices, post.ID)
-	if text == "" {
-		return
-	}
 	msg, err := b.send(ctx, text, noticeKeyboard(post))
 	if err != nil {
 		slog.Error("send post notice", "error", err)
@@ -359,6 +364,58 @@ func (b *Bot) showNotice(ctx context.Context, post store.WeekPost, text string) 
 		b.notices = map[int64]postNotice{}
 	}
 	b.notices[post.ID] = postNotice{messageID: msg.ID, text: text}
+}
+
+// showErrorNotice показывает ошибки поста как его уведомление: в сообщении messageID или новым сообщением
+// (messageID = 0). Прежнее уведомление удаляется, чтобы ошибки не висели в двух местах. header - строка
+// над ошибками, в сравнение текста уведомления при правках она не входит
+func (b *Bot) showErrorNotice(ctx context.Context, post store.WeekPost, header string, messageID int) error {
+	b.postMu.Lock()
+	defer b.postMu.Unlock()
+	text := b.noticeText(ctx, post)
+	shown := text
+	if header != "" {
+		shown = header + "\n\n" + text
+	}
+	if old := b.notices[post.ID]; old.messageID != 0 && old.messageID != messageID {
+		if err := b.deleteMessage(ctx, b.cfg.OwnerID, old.messageID); err != nil {
+			slog.Warn("delete post notice", "error", err)
+		}
+	}
+	delete(b.notices, post.ID)
+	if messageID != 0 {
+		b.edit(ctx, messageID, shown, noticeKeyboard(post))
+	} else {
+		msg, err := b.send(ctx, shown, noticeKeyboard(post))
+		if err != nil {
+			return err
+		}
+		messageID = msg.ID
+	}
+	if b.notices == nil {
+		b.notices = map[int64]postNotice{}
+	}
+	b.notices[post.ID] = postNotice{messageID: messageID, text: text}
+	return nil
+}
+
+// showStatusInNotice ставит статус недели на место живого сообщения поста. Статус показывает последний пост,
+// поэтому сообщение поста прошлой недели просто удаляется. Вызывать под postMu
+func (b *Bot) showStatusInNotice(ctx context.Context, post store.WeekPost, messageID int) {
+	latest, err := b.store.LatestWeekPost(ctx, b.userID)
+	if err != nil || latest.ID != post.ID {
+		if err := b.deleteMessage(ctx, b.cfg.OwnerID, messageID); err != nil {
+			slog.Warn("delete post notice", "error", err)
+		}
+		delete(b.notices, post.ID)
+		return
+	}
+	status, markup := b.buildPreview(ctx, false)
+	b.edit(ctx, messageID, status, markup)
+	if b.notices == nil {
+		b.notices = map[int64]postNotice{}
+	}
+	b.notices[post.ID] = postNotice{messageID: messageID}
 }
 
 // noticeKeyboard - кнопки уведомления: "Обновить" пересчитывает именно его, а не присылает статус
@@ -398,8 +455,7 @@ func (b *Bot) onNoticeRefresh(ctx context.Context, cq *models.CallbackQuery, mes
 	}
 	delete(b.notices, post.ID)
 	if text == "" {
-		status, markup := b.buildPreview(ctx, false)
-		b.edit(ctx, messageID, status, markup)
+		b.showStatusInNotice(ctx, post, messageID)
 		return
 	}
 	b.edit(ctx, messageID, text, noticeKeyboard(post))
@@ -569,12 +625,9 @@ func (b *Bot) onCallback(ctx context.Context, cq *models.CallbackQuery) {
 		b.onNoticeRefresh(ctx, cq, messageID)
 	case cq.Data == viewStatus || cq.Data == viewSubmit:
 		b.answer(ctx, cq, "Обновлено", false)
-		text, markup := b.buildPreview(ctx, cq.Data == viewSubmit)
-		if messageID == 0 {
-			b.sendPreview(ctx, cq.Data == viewSubmit)
-			return
+		if err := b.showPreview(ctx, cq.Data == viewSubmit, messageID, ""); err != nil {
+			slog.Error("send preview", "error", err)
 		}
-		b.edit(ctx, messageID, text, markup)
 	case cq.Data == viewNew:
 		b.answer(ctx, cq, "", false)
 		b.sendPreview(ctx, false)

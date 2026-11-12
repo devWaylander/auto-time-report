@@ -200,8 +200,9 @@ func TestChannelNotesDoNotReplaceWeekPost(t *testing.T) {
 	}
 }
 
-// У поста одно уведомление о проблемах: без изменений бот молчит, при изменениях заменяет его новым,
-// после исправления удаляет. Уведомление, ставшее статусом по "Обновить", бот не трогает
+// У поста одно живое сообщение. Проблемы не изменились - бот молчит, изменились - старое сообщение
+// удаляется и приходит новое уведомление. Всё исправлено - на месте уведомления статус недели, и следующие
+// чистые правки обновляют его там же
 func TestPostNotice(t *testing.T) {
 	b, tg, _, _ := newTelegramBot(t)
 	ctx := context.Background()
@@ -218,6 +219,20 @@ func TestPostNotice(t *testing.T) {
 	editTo := func(text string) []apiCall {
 		b.onChannelPost(ctx, edit(week, text, day(10, 20)), true)
 		return tg.take()
+	}
+	pressNotice := func(messageID string) []apiCall {
+		id, _ := strconv.Atoi(messageID)
+		b.onCallback(ctx, &models.CallbackQuery{
+			ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: fmt.Sprintf("%s%d", noticePrefix, saved(t, b).ID),
+			Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: id}},
+		})
+		return tg.take()
+	}
+	// statusAt - сообщение messageID стало статусом недели: только правка на месте, без новых и удалённых
+	statusAt := func(calls []apiCall, messageID string) bool {
+		return countMethod(calls, "sendMessage") == 0 && countMethod(calls, "deleteMessage") == 0 &&
+			lastParam(calls, "editMessageText", "message_id") == messageID &&
+			strings.Contains(lastParam(calls, "editMessageText", "text"), "Неделя")
 	}
 
 	// Пустая дата - уведомление
@@ -241,58 +256,110 @@ func TestPostNotice(t *testing.T) {
 	if texts := tg.sent(calls); len(texts) != 1 || !strings.Contains(texts[0], "ошибки") {
 		t.Fatalf("expected an error notice, got %q", texts)
 	}
-	// Всё исправлено - уведомление удаляется, новых сообщений нет
+	// Всё исправлено - на месте уведомления статус; следующая чистая правка обновляет его там же
 	second := noticeID()
-	calls = editTo("19.10\nРабота - 8ч\n\n20.10\nРабота - 8ч")
-	if lastParam(calls, "deleteMessage", "message_id") != second || len(tg.sent(calls)) != 0 {
-		t.Fatalf("fixed post: %+v", calls)
+	if calls := editTo("19.10\nРабота - 8ч\n\n20.10\nРабота - 8ч"); !statusAt(calls, second) {
+		t.Fatalf("fixed notice did not become the status: %+v", calls)
 	}
-
-	// "Обновить" на уведомлении пересчитывает его на месте и не теряет: следующая правка его удалит
+	if calls := editTo("19.10\nРабота - 8ч\n\n20.10\nРабота - 7ч"); !statusAt(calls, second) {
+		t.Fatalf("status was not updated in place: %+v", calls)
+	}
+	// Новая проблема - статус удаляется, внизу свежее уведомление
 	calls = editTo("19.10\nРабота")
+	if lastParam(calls, "deleteMessage", "message_id") != second || len(tg.sent(calls)) != 1 {
+		t.Fatalf("status was not replaced by a notice: %+v", calls)
+	}
 	markup := lastParam(calls, "sendMessage", "reply_markup")
 	if !strings.Contains(markup, noticePrefix) || strings.Contains(markup, viewStatus) {
 		t.Fatalf("notice refresh button = %s", markup)
 	}
+
+	// "Обновить" на уведомлении пересчитывает его на месте и не теряет
 	third := noticeID()
-	pressNotice := func() []apiCall {
-		id, _ := strconv.Atoi(noticeID())
-		var post int64
-		for pid := range b.notices {
-			post = pid
-		}
-		b.onCallback(ctx, &models.CallbackQuery{
-			ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: fmt.Sprintf("%s%d", noticePrefix, post),
-			Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: id}},
-		})
-		return tg.take()
-	}
-	calls = pressNotice()
+	calls = pressNotice(third)
 	if lastParam(calls, "editMessageText", "message_id") != third || !strings.Contains(lastParam(calls, "editMessageText", "text"), "ошибки") {
 		t.Fatalf("notice was not refreshed in place: %+v", calls)
 	}
 	if !strings.Contains(lastParam(calls, "editMessageText", "reply_markup"), noticePrefix) || noticeID() != third {
 		t.Fatalf("refreshed notice lost its button or tracking: %+v", calls)
 	}
-	calls = editTo("19.10\nРабота - 8ч")
-	if lastParam(calls, "deleteMessage", "message_id") != third || len(tg.sent(calls)) != 0 {
-		t.Fatalf("refreshed notice not deleted after the fix: %+v", calls)
+	if calls := editTo("19.10\nРабота - 8ч"); !statusAt(calls, third) {
+		t.Fatalf("refreshed notice did not become the status after the fix: %+v", calls)
 	}
 
-	// После перезапуска бот уведомление не помнит: исправленный пост его не удалит, но "Обновить"
-	// на нём покажет статус
+	// После перезапуска бот сообщение не помнит: исправленный пост его не тронет, а "Обновить" на нём
+	// покажет статус, и сообщение снова живое
 	editTo("19.10\nРабота\n\n20.10")
-	stale, _ := strconv.Atoi(noticeID())
+	stale := noticeID()
 	b.notices = nil
-	editTo("19.10\nРабота - 8ч\n\n20.10\nРабота - 8ч")
-	b.onCallback(ctx, &models.CallbackQuery{
-		ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: fmt.Sprintf("%s%d", noticePrefix, saved(t, b).ID),
-		Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: stale}},
-	})
-	calls = tg.take()
-	if lastParam(calls, "editMessageText", "message_id") != fmt.Sprint(stale) ||
-		!strings.Contains(lastParam(calls, "editMessageText", "text"), "Неделя") || len(b.notices) != 0 {
+	if calls := editTo("19.10\nРабота - 8ч\n\n20.10\nРабота - 8ч"); len(calls) != 0 {
+		t.Fatalf("untracked notice was touched: %+v", calls)
+	}
+	if calls := pressNotice(stale); !statusAt(calls, stale) || noticeID() != stale {
 		t.Fatalf("clean post refresh did not show the status: %+v", calls)
+	}
+}
+
+// /status и /submit при ошибках в посте показывают само уведомление: прежнее удаляется, ошибки не висят
+// в двух сообщениях, и после исправления на месте ответа появится статус
+func TestPreviewWithErrorsIsTheNotice(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	ctx := context.Background()
+	week := channelPost("19.10\nРабота - 8ч", day(10, 19))
+	b.onChannelPost(ctx, week, false)
+	b.onChannelPost(ctx, edit(week, "19.10\nРабота", day(10, 20)), true)
+	tg.take()
+	first := fmt.Sprint(b.notices[saved(t, b).ID].messageID)
+
+	for _, cmd := range []string{"/status", "/submit"} {
+		b.onMessage(ctx, dm(cmd))
+		calls := tg.take()
+		if lastParam(calls, "deleteMessage", "message_id") != first || countMethod(calls, "sendMessage") != 1 ||
+			!strings.Contains(lastParam(calls, "sendMessage", "reply_markup"), noticePrefix) {
+			t.Fatalf("%s with errors did not move the notice: %+v", cmd, calls)
+		}
+		first = fmt.Sprint(b.notices[saved(t, b).ID].messageID)
+	}
+
+	// "Обновить" под обычным статусом, когда в посте ошибки, - этот статус становится уведомлением
+	b.onCallback(ctx, &models.CallbackQuery{
+		ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: viewStatus,
+		Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: 77}},
+	})
+	calls := tg.take()
+	if lastParam(calls, "deleteMessage", "message_id") != first || lastParam(calls, "editMessageText", "message_id") != "77" ||
+		b.notices[saved(t, b).ID].messageID != 77 {
+		t.Fatalf("refreshed status did not become the notice: %+v", calls)
+	}
+
+	b.onChannelPost(ctx, edit(week, "19.10\nРабота - 8ч", day(10, 21)), true)
+	calls = tg.take()
+	if lastParam(calls, "editMessageText", "message_id") != "77" || !strings.Contains(lastParam(calls, "editMessageText", "text"), "Неделя") {
+		t.Fatalf("fixed post did not show the status in place: %+v", calls)
+	}
+}
+
+// Уведомление по посту прошлой недели после исправления удаляется: статус показывал бы другую неделю
+func TestOldWeekNoticeIsDeletedWhenFixed(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	b.clock = func() time.Time { return time.Date(2026, 10, 28, 12, 0, 0, 0, tz) }
+	ctx := context.Background()
+	old := channelPost("19.10\nРабота - 8ч", day(10, 19))
+	b.onChannelPost(ctx, old, false)
+	b.onChannelPost(ctx, channelPost("26.10\nРабота - 8ч", day(10, 26)), false)
+	b.onChannelPost(ctx, edit(old, "19.10\nРабота", day(10, 27)), true)
+	calls := tg.take()
+	if len(tg.sent(calls)) != 1 {
+		t.Fatalf("no notice for last week's post: %+v", calls)
+	}
+	var notice int
+	for _, n := range b.notices {
+		notice = n.messageID
+	}
+	b.onChannelPost(ctx, edit(old, "19.10\nРабота - 8ч", day(10, 28)), true)
+	calls = tg.take()
+	if lastParam(calls, "deleteMessage", "message_id") != fmt.Sprint(notice) || countMethod(calls, "editMessageText") != 0 || len(b.notices) != 0 {
+		t.Fatalf("last week's notice: %+v", calls)
 	}
 }
 
