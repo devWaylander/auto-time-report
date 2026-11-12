@@ -260,7 +260,7 @@ func TestRenderShortfall(t *testing.T) {
 		"⏳ Ср 21.10 - 2ч\n",
 		"⏳ Пт 23.10 - 6ч 30м из 7ч <i>(сокращённый)</i>",
 		"⏳ Сб 24.10 - 2ч <i>(выходной)</i>",
-		"⚠️ Недобор: 20.10 (2ч), 23.10 (30м)\n",
+		"⚠️ Недобор: Вт-2ч, Пт-30м\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("preview has no %q:\n%s", want, text)
@@ -479,5 +479,16 @@ func TestPreviewShowsJiraMismatch(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("preview has no %q:\n%s", want, text)
 		}
+	}
+}
+
+// Если превью захватывает две недели, "Пн" неоднозначен: в недоборе к дню недели добавляется дата
+func TestRenderShortfallTwoWeeks(t *testing.T) {
+	text := renderPreview(previewInput{Days: []dayLine{
+		{Date: day(10, 23), Kind: calendar.Working, Total: 7 * time.Hour, Worklogs: 1},
+		{Date: day(10, 26), Kind: calendar.Working, Total: 6 * time.Hour, Worklogs: 1},
+	}})
+	if !strings.Contains(text, "⚠️ Недобор: Пт 23.10-1ч, Пн 26.10-2ч\n") {
+		t.Errorf("two-week shortfall:\n%s", text)
 	}
 }

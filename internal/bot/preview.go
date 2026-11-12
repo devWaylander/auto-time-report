@@ -302,10 +302,16 @@ func renderPreview(in previewInput) string {
 		}
 		fmt.Fprintf(&b, "⚠️ Нет записей за рабочие дни: %s\n", strings.Join(days, ", "))
 	}
+	// Внутри одной недели хватает дня недели; если превью шире, к нему добавляется дата
+	oneWeek := weekStart(first).Equal(weekStart(last))
 	var short []string
 	for _, d := range in.Days {
 		if s := d.shortfall(); s > 0 {
-			short = append(short, fmt.Sprintf("%s (%s)", d.Date.Format("02.01"), parser.FormatDuration(s)))
+			label := weekdays[d.Date.Weekday()]
+			if !oneWeek {
+				label += " " + d.Date.Format("02.01")
+			}
+			short = append(short, label+"-"+parser.FormatDuration(s))
 		}
 	}
 	if len(short) > 0 {
