@@ -17,6 +17,8 @@ DBMATE  := $(COMPOSE) run --rm --no-deps migrate
 # Образы, которые собирает compose (имя проекта задано в docker-compose.yml), и чем ходить на сервер в make ship
 IMAGES  := auto-time-report-bot auto-time-report-vpn
 SSH     ?= ssh
+# make ship ходит на сервер дважды: соединения идут через одно мастер-соединение, пароль спросится один раз
+SHIP_SSH = $(SSH) -o ControlMaster=auto -o ControlPath=~/.ssh/auto-time-report-%C -o ControlPersist=10m
 # Старые версии наших образов: после сборки или docker load тег уходит на новый образ, а старый остаётся
 # безымянным и копится. Чистим только образы этого проекта и только неиспользуемые
 PRUNE   := docker image prune -f --filter label=com.docker.compose.project=auto-time-report
@@ -106,11 +108,12 @@ up-build: preflight ## Собрать образы и поднять всё в D
 .PHONY: ship
 ship: ## Собрать образы у себя и залить на сервер: make ship host=user@server (порт - через SSH="ssh -p 2222")
 	@test -n "$(host)" || { echo "Укажи сервер: make ship host=user@server"; exit 1; }
-	@remote=$$($(SSH) $(host) uname -m) || { echo "Не удалось зайти на $(host) по SSH"; exit 1; }; \
+	@remote=$$($(SHIP_SSH) $(host) uname -m) || { echo "Не удалось зайти на $(host) по SSH"; exit 1; }; \
 		test "$$remote" = "$$(uname -m)" || { echo "Архитектура сервера ($$remote) не совпадает с локальной ($$(uname -m))"; exit 1; }
 	$(COMPOSE) build
 	@$(PRUNE) >/dev/null
-	docker save $(IMAGES) | gzip | $(SSH) $(host) 'gunzip | docker load'
+	docker save $(IMAGES) | gzip | $(SHIP_SSH) $(host) 'gunzip | docker load'
+	@$(SHIP_SSH) -O exit $(host) 2>/dev/null || true
 	@echo "Готово: на сервере make up"
 
 # Общие проверки перед запуском контейнеров
