@@ -63,7 +63,7 @@ func newTestBot(t *testing.T, cal fakeCalendar) (*Bot, *store.Store) {
 }
 
 func TestSubmitDataRoundTrip(t *testing.T) {
-	markup := previewKeyboard(true, 17, hashText("post"), 2, 0, true).(models.InlineKeyboardMarkup)
+	markup := previewKeyboard(previewKeys{Submit: true, PostID: 17, Hash: hashText("post"), Pending: 2, Filled: true}).(models.InlineKeyboardMarkup)
 	for i, approve := range []bool{false, true} {
 		data := markup.InlineKeyboard[0][i].CallbackData
 		if len(data) > 64 {
@@ -90,6 +90,10 @@ func TestPreviewKeyboard(t *testing.T) {
 		for _, row := range m.(models.InlineKeyboardMarkup).InlineKeyboard {
 			var r []string
 			for _, btn := range row {
+				if btn.URL != "" {
+					r = append(r, "url")
+					continue
+				}
 				r = append(r, btn.CallbackData)
 			}
 			rows = append(rows, r)
@@ -101,22 +105,31 @@ func TestPreviewKeyboard(t *testing.T) {
 		submit              bool
 		pending, unapproved int
 		filled              bool
+		url                 string
 		want                string
 	}{
-		{"status, nothing to do", false, 0, 0, true, "[[v:status]]"},
-		{"status, something to send", false, 2, 0, true, "[[v:status v:submit]]"},
-		{"status, something to send, week not filled", false, 2, 0, false, "[[v:status v:submit]]"},
-		{"status, only approval", false, 0, 1, true, "[[v:status v:submit]]"},
-		{"status, only approval, week not filled", false, 0, 1, false, "[[v:status]]"},
-		{"submit, nothing to do", true, 0, 0, true, "[[v:submit x]]"},
-		{"submit, only approval", true, 0, 1, true, "[[s:1:h:1] [v:submit x]]"},
-		{"submit, only approval, week not filled", true, 0, 1, false, "[[v:submit x]]"},
-		{"submit, worklogs", true, 2, 0, true, "[[s:1:h:0 s:1:h:1] [v:submit x]]"},
-		{"submit, worklogs, week not filled", true, 2, 1, false, "[[s:1:h:0] [v:submit x]]"},
+		{"status, nothing to do", false, 0, 0, true, "u", "[[v:status url]]"},
+		{"status, no post link", false, 0, 0, true, "", "[[v:status]]"},
+		{"status, something to send", false, 2, 0, true, "u", "[[v:submit] [v:status url]]"},
+		{"status, something to send, week not filled", false, 2, 0, false, "u", "[[v:submit] [v:status url]]"},
+		{"status, only approval", false, 0, 1, true, "u", "[[v:submit] [v:status url]]"},
+		{"status, only approval, week not filled", false, 0, 1, false, "u", "[[v:status url]]"},
+		{"submit, nothing to do", true, 0, 0, true, "u", "[[v:submit url x]]"},
+		{"submit, only approval", true, 0, 1, true, "u", "[[s:1:h:1] [v:submit url x]]"},
+		{"submit, only approval, week not filled", true, 0, 1, false, "u", "[[v:submit url x]]"},
+		{"submit, worklogs", true, 2, 0, true, "u", "[[s:1:h:0 s:1:h:1] [v:submit url x]]"},
+		{"submit, worklogs, week not filled", true, 2, 1, false, "", "[[s:1:h:0] [v:submit x]]"},
 	} {
-		if got := fmt.Sprint(data(previewKeyboard(tc.submit, 1, "h", tc.pending, tc.unapproved, tc.filled))); got != tc.want {
+		keys := previewKeys{Submit: tc.submit, PostID: 1, Hash: "h", PostURL: tc.url, Pending: tc.pending, Unapproved: tc.unapproved, Filled: tc.filled}
+		if got := fmt.Sprint(data(previewKeyboard(keys))); got != tc.want {
 			t.Errorf("%s: keyboard = %s, want %s", tc.name, got, tc.want)
 		}
+	}
+	if got := fmt.Sprint(data(statusKeyboard("u"))); got != "[[v:new url]]" {
+		t.Errorf("status keyboard = %s", got)
+	}
+	if got := fmt.Sprint(data(statusKeyboard(""))); got != "[[v:new]]" {
+		t.Errorf("status keyboard without post = %s", got)
 	}
 }
 
@@ -165,7 +178,7 @@ func TestPreviewInputAndRender(t *testing.T) {
 		t.Errorf("today is marked %d times:\n%s", n, text)
 	}
 	for _, want := range []string{
-		`Неделя 19.10-23.10.2026</b> · <a href="https://t.me/c/1234567890/1">пост</a>`,
+		"<b>Неделя 19.10-23.10.2026</b>\n\n",
 		"✅ Пн 19.10 - 8ч\n",
 		"⏳ Вт 20.10 - 8ч\n",
 		"▫️ Ср 21.10 -\n",
@@ -225,8 +238,8 @@ func TestPreviewApprovalWaitsForFilledWeek(t *testing.T) {
 	if !strings.Contains(status, "Неделя заполнена, можно отправить на проверку") || strings.Contains(status, "Нет записей") {
 		t.Errorf("vacation day must count as filled:\n%s", status)
 	}
-	if got := len(markup.(models.InlineKeyboardMarkup).InlineKeyboard[0]); got != 2 {
-		t.Errorf("status keyboard has %d buttons, want refresh and submit", got)
+	if rows := markup.(models.InlineKeyboardMarkup).InlineKeyboard; len(rows) != 2 || rows[0][0].CallbackData != viewSubmit {
+		t.Errorf("status keyboard = %v, want submit above refresh", rows)
 	}
 }
 
@@ -422,13 +435,19 @@ func TestPostURL(t *testing.T) {
 	}
 }
 
-func TestPostErrorsText(t *testing.T) {
-	err := errors.New("boom")
-	text := postErrorsText("⚠️ В посте недели ошибки:", store.WeekPost{ChatID: -1001234567890, MessageID: 7}, err)
-	if !strings.HasPrefix(text, "⚠️ В посте недели ошибки:\n") || !strings.Contains(text, `<a href="https://t.me/c/1234567890/7">Открыть пост</a>`) {
-		t.Errorf("no post link:\n%s", text)
+// Под ошибками в посте - кнопка на сам пост, ссылка в тексте не нужна
+func TestPreviewErrorsHavePostButton(t *testing.T) {
+	b, st := newTestBot(t, nil)
+	ctx := context.Background()
+	if _, _, err := st.SaveWeekPost(ctx, store.WeekPost{UserID: b.userID, ChatID: -1001234567890, MessageID: 7, Text: "19.10\nРабота", PostedAt: day(10, 19)}); err != nil {
+		t.Fatal(err)
 	}
-	if text := postErrorsText("x", store.WeekPost{ChatID: 123, MessageID: 7}, err); strings.Contains(text, "Открыть пост") {
-		t.Errorf("link for a chat that is not a channel:\n%s", text)
+	text, markup := b.buildPreview(ctx, false)
+	if !strings.HasPrefix(text, "⚠️ В посте недели ошибки, предпросмотр не собран:\n") || strings.Contains(text, "<a ") {
+		t.Errorf("errors text:\n%s", text)
+	}
+	rows := markup.(models.InlineKeyboardMarkup).InlineKeyboard
+	if len(rows) != 1 || len(rows[0]) != 2 || rows[0][1].URL != "https://t.me/c/1234567890/7" {
+		t.Errorf("errors keyboard = %+v, want refresh and post", rows)
 	}
 }

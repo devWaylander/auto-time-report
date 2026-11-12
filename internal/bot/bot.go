@@ -304,8 +304,8 @@ func (b *Bot) updateKnownPost(ctx context.Context, prev, post store.WeekPost) {
 	report, err := parser.Parse(saved.Text, b.cfg.DefaultIssue, b.now())
 	if err != nil {
 		// "Обновить" перерисует это сообщение: после исправления на его месте будет статус недели
-		text := postErrorsText("⚠️ В посте недели ошибки:", saved, err)
-		if _, err := b.send(ctx, text, previewKeyboard(false, 0, "", 0, 0, false)); err != nil {
+		text := "⚠️ В посте недели ошибки:\n" + formatParseErrors(err)
+		if _, err := b.send(ctx, text, previewKeyboard(previewKeys{PostURL: postURL(saved.ChatID, saved.MessageID)})); err != nil {
 			slog.Error("send post errors", "error", err)
 		}
 		return

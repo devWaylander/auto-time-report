@@ -258,7 +258,7 @@ func (b *Bot) runSubmit(ctx context.Context, p pendingSubmit, passphrase []byte)
 	}
 	slog.Info("submit finished", "created", created, "approved", len(outcome.Approved))
 	progress("Отправка завершена, итог ниже")
-	if _, err := b.send(dbCtx, renderOutcome(outcome, runErr), statusButton); err != nil {
+	if _, err := b.send(dbCtx, renderOutcome(outcome, runErr), statusKeyboard("")); err != nil {
 		slog.Error("send outcome", "error", err)
 	}
 }

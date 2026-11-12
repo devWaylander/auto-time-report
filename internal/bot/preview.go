@@ -103,21 +103,23 @@ func (b *Bot) sendPreview(ctx context.Context, submit bool) {
 
 func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.ReplyMarkup) {
 	// Даже без превью оставляем "Обновить": поправил пост - нажал, не набирая команду заново
-	refreshOnly := previewKeyboard(submit, 0, "", 0, 0, false)
 	w, err := b.loadWeek(ctx)
+	keys := previewKeys{Submit: submit, PostURL: postURL(w.post.ChatID, w.post.MessageID)}
 	switch {
 	case errors.Is(err, errNoPost):
-		return "Поста текущей недели в канале пока нет", refreshOnly
+		return "Поста текущей недели в канале пока нет", previewKeyboard(keys)
 	case err != nil && w.post.ID != 0:
-		return postErrorsText("⚠️ В посте недели ошибки, предпросмотр не собран:", w.post, err), refreshOnly
+		return "⚠️ В посте недели ошибки, предпросмотр не собран:\n" + formatParseErrors(err), previewKeyboard(keys)
 	case err != nil:
 		slog.Error("load week", "error", err)
-		return "⚠️ Предпросмотр не собран, подробности в логах бота", refreshOnly
+		return "⚠️ Предпросмотр не собран, подробности в логах бота", previewKeyboard(keys)
 	}
 
 	in := b.previewInput(ctx, w)
 	in.Submit = submit
-	return renderPreview(in), previewKeyboard(submit, w.post.ID, hashText(w.post.Text), in.Pending, in.Unapproved, !in.Unfilled)
+	keys.PostID, keys.Hash = w.post.ID, hashText(w.post.Text)
+	keys.Pending, keys.Unapproved, keys.Filled = in.Pending, in.Unapproved, !in.Unfilled
+	return renderPreview(in), previewKeyboard(keys)
 }
 
 // dayLine - строка превью за один день
@@ -149,7 +151,6 @@ type previewInput struct {
 	Pending      int
 	Unapproved   int
 	CalendarDown bool
-	PostURL      string // ссылка на пост недели в канале; пусто - без ссылки
 	Today        time.Time
 	Submit       bool // превью с кнопками отправки
 }
@@ -196,7 +197,6 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 			in.Days = append(in.Days, line)
 		}
 	}
-	in.PostURL = postURL(w.post.ChatID, w.post.MessageID)
 	in.Pending = len(w.pendingWorklogs())
 	in.Unapproved = len(w.unapproved)
 	return in
@@ -216,11 +216,7 @@ var weekdays = [...]string{"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб
 func renderPreview(in previewInput) string {
 	var b strings.Builder
 	first, last := in.Days[0].Date, in.Days[len(in.Days)-1].Date
-	fmt.Fprintf(&b, "<b>Неделя %s-%s</b>", first.Format("02.01"), last.Format("02.01.2006"))
-	if in.PostURL != "" {
-		fmt.Fprintf(&b, " · <a href=\"%s\">пост</a>", html.EscapeString(in.PostURL))
-	}
-	b.WriteString("\n\n")
+	fmt.Fprintf(&b, "<b>Неделя %s-%s</b>\n\n", first.Format("02.01"), last.Format("02.01.2006"))
 
 	for _, d := range in.Days {
 		// Значок в начале каждой строки: эмодзи выше текста, и строки без него выходили бы ниже остальных
@@ -306,61 +302,74 @@ func renderPreview(in previewInput) string {
 	return b.String()
 }
 
-// previewKeyboard - кнопки под превью. В режиме отправки - кнопки записи, если есть что записывать,
-// в режиме статуса - переход к отправке. На проверку - только когда заполнены все рабочие дни (filled).
-// Внизу всегда "Обновить"
-func previewKeyboard(submit bool, postID int64, hash string, pending, unapproved int, filled bool) models.ReplyMarkup {
+// previewKeys - из чего собираются кнопки под превью
+type previewKeys struct {
+	Submit     bool // режим отправки
+	PostID     int64
+	Hash       string
+	PostURL    string // кнопка "Пост"; пусто - без неё
+	Pending    int
+	Unapproved int
+	Filled     bool // все рабочие дни заполнены: можно на проверку
+}
+
+// previewKeyboard - кнопки под превью. Сверху действие: в режиме отправки - запись, если есть что
+// записывать, в режиме статуса - переход к отправке. На проверку - только когда заполнены все рабочие дни.
+// Снизу всегда "Обновить" и "Пост"
+func previewKeyboard(k previewKeys) models.ReplyMarkup {
 	refresh := models.InlineKeyboardButton{Text: "🔄 Обновить", CallbackData: viewStatus}
-	if submit {
+	if k.Submit {
 		refresh.CallbackData = viewSubmit
 	}
-	nav := []models.InlineKeyboardButton{refresh}
-	if !submit {
-		if pending > 0 || unapproved > 0 && filled {
-			nav = append(nav, models.InlineKeyboardButton{Text: "📨 К отправке", CallbackData: viewSubmit})
-		}
-		return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{nav}}
-	}
-	nav = append(nav, models.InlineKeyboardButton{Text: "✖️ Скрыть", CallbackData: hideData})
+	nav := append([]models.InlineKeyboardButton{refresh}, postButton(k.PostURL)...)
 
-	data := func(approve bool) string {
-		a := "0"
-		if approve {
-			a = "1"
-		}
-		return fmt.Sprintf("%s%d:%s:%s", submitPrefix, postID, hash, a)
-	}
 	var row []models.InlineKeyboardButton
-	switch {
-	case pending > 0:
-		row = append(row, models.InlineKeyboardButton{Text: "✍️ Записать", CallbackData: data(false)})
-		if filled {
-			row = append(row, models.InlineKeyboardButton{Text: "📨 Записать и на проверку", CallbackData: data(true)})
+	if !k.Submit {
+		if k.Pending > 0 || k.Unapproved > 0 && k.Filled {
+			row = append(row, models.InlineKeyboardButton{Text: "📨 К отправке", CallbackData: viewSubmit})
 		}
-	case unapproved > 0 && filled:
-		row = append(row, models.InlineKeyboardButton{Text: "📨 Отправить на проверку", CallbackData: data(true)})
-	default:
+	} else {
+		nav = append(nav, models.InlineKeyboardButton{Text: "✖️ Скрыть", CallbackData: hideData})
+		data := func(approve bool) string {
+			a := "0"
+			if approve {
+				a = "1"
+			}
+			return fmt.Sprintf("%s%d:%s:%s", submitPrefix, k.PostID, k.Hash, a)
+		}
+		switch {
+		case k.Pending > 0:
+			row = append(row, models.InlineKeyboardButton{Text: "✍️ Записать", CallbackData: data(false)})
+			if k.Filled {
+				row = append(row, models.InlineKeyboardButton{Text: "📨 Записать и на проверку", CallbackData: data(true)})
+			}
+		case k.Unapproved > 0 && k.Filled:
+			row = append(row, models.InlineKeyboardButton{Text: "📨 Отправить на проверку", CallbackData: data(true)})
+		}
+	}
+	if len(row) == 0 {
 		return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{nav}}
 	}
 	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row, nav}}
 }
 
-// statusButton - "Статус" под напоминаниями и итогом отправки: присылает свежее превью отдельным сообщением
-var statusButton = models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-	{{Text: "📊 Статус", CallbackData: viewNew}},
-}}
-
-// postURL - ссылка на сообщение канала. Вид t.me/c/... работает и для закрытых каналов, если ты в них
-// состоишь. У каналов ID начинается с -100, у остальных чатов таких ссылок нет
-// postErrorsText - заголовок, ошибки разбора поста и ссылка на сам пост, если её можно собрать
-func postErrorsText(header string, post store.WeekPost, err error) string {
-	text := header + "\n" + formatParseErrors(err)
-	if u := postURL(post.ChatID, post.MessageID); u != "" {
-		text += fmt.Sprintf("\n\n<a href=\"%s\">Открыть пост</a>", html.EscapeString(u))
+// postButton - кнопка-ссылка на пост недели; без ссылки кнопки нет
+func postButton(url string) []models.InlineKeyboardButton {
+	if url == "" {
+		return nil
 	}
-	return text
+	return []models.InlineKeyboardButton{{Text: "🔗 Пост", URL: url}}
 }
 
+// statusKeyboard - "Статус" под напоминаниями и итогом отправки: присылает свежее превью отдельным
+// сообщением. Рядом "Пост", если передана ссылка
+func statusKeyboard(postURL string) models.ReplyMarkup {
+	row := append([]models.InlineKeyboardButton{{Text: "📊 Статус", CallbackData: viewNew}}, postButton(postURL)...)
+	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}}
+}
+
+// postURL - ссылка на сообщение канала. Вид t.me/c/... работает и для закрытых каналов, если читатель
+// в них состоит. У каналов ID начинается с -100, у остальных чатов таких ссылок нет
 func postURL(chatID, messageID int64) string {
 	id, ok := strings.CutPrefix(strconv.FormatInt(chatID, 10), "-100")
 	if !ok || id == "" || messageID <= 0 {
@@ -380,10 +389,17 @@ func weekStart(d time.Time) time.Time {
 	return d.AddDate(0, 0, -offset)
 }
 
-// DailyReminder - напоминание notify: за сегодня в посте нет записей
+// DailyReminder - напоминание notify: за сегодня в посте нет записей. Кнопка "Пост" ведёт к последнему
+// посту: если за эту неделю его ещё нет, это место в канале рядом с концом ленты
 func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
+	url := ""
+	if post, err := b.store.LatestWeekPost(ctx, b.userID); err == nil {
+		url = postURL(post.ChatID, post.MessageID)
+	} else if !errors.Is(err, store.ErrNotFound) {
+		slog.Error("load week post", "error", err)
+	}
 	_, err := b.send(ctx, fmt.Sprintf("📝 В посте недели отсутствуют записи за сегодня (%s %s)",
-		strings.ToLower(weekdays[date.Weekday()]), date.Format("02.01")), statusButton)
+		strings.ToLower(weekdays[date.Weekday()]), date.Format("02.01")), statusKeyboard(url))
 	return err
 }
 
