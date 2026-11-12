@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -199,28 +200,64 @@ func TestChannelNotesDoNotReplaceWeekPost(t *testing.T) {
 	}
 }
 
-func TestEmptyDateWarnedOnce(t *testing.T) {
+// У поста одно уведомление о проблемах: без изменений бот молчит, при изменениях заменяет его новым,
+// после исправления удаляет. Уведомление, ставшее статусом по "Обновить", бот не трогает
+func TestPostNotice(t *testing.T) {
 	b, tg, _, _ := newTelegramBot(t)
 	ctx := context.Background()
 
 	week := channelPost("19.10\nРабота - 8ч", day(10, 19))
 	b.onChannelPost(ctx, week, false)
 	tg.take()
+	noticeID := func() string {
+		for _, n := range b.notices {
+			return fmt.Sprint(n.messageID)
+		}
+		return ""
+	}
+	editTo := func(text string) []apiCall {
+		b.onChannelPost(ctx, edit(week, text, day(10, 20)), true)
+		return tg.take()
+	}
 
-	// Новая пустая дата - предупреждение
-	b.onChannelPost(ctx, edit(week, "19.10\nРабота - 8ч\n\n20.10", day(10, 20)), true)
-	if texts := tg.sent(tg.take()); len(texts) != 1 || texts[0] != "⚠️ 20.10: дата есть, записей под ней нет" {
-		t.Fatalf("expected an empty date warning, got %q", texts)
+	// Пустая дата - уведомление
+	calls := editTo("19.10\nРабота - 8ч\n\n20.10")
+	if texts := tg.sent(calls); len(texts) != 1 || texts[0] != "⚠️ 20.10: дата есть, записей под ней нет" {
+		t.Fatalf("expected an empty date notice, got %q", texts)
+	}
+	if markup := lastParam(calls, "sendMessage", "reply_markup"); !strings.Contains(markup, viewStatus) {
+		t.Errorf("notice has no refresh button: %s", markup)
 	}
 	// Та же пустая дата при следующей правке - без повтора
-	b.onChannelPost(ctx, edit(week, "19.10\nРабота, правка - 8ч\n\n20.10", day(10, 20)), true)
-	if texts := tg.sent(tg.take()); len(texts) != 0 {
-		t.Fatalf("empty date warned again: %q", texts)
+	if calls := editTo("19.10\nРабота, правка - 8ч\n\n20.10"); len(calls) != 0 {
+		t.Fatalf("unchanged notice was sent again: %+v", calls)
 	}
-	// Дописанный день - тишина
-	b.onChannelPost(ctx, edit(week, "19.10\nРабота, правка - 8ч\n\n20.10\nРабота - 8ч", day(10, 20)), true)
-	if texts := tg.sent(tg.take()); len(texts) != 0 {
-		t.Fatalf("filled day produced messages: %q", texts)
+	// Ошибка - старое уведомление удаляется, приходит новое
+	first := noticeID()
+	calls = editTo("19.10\nРабота\n\n20.10")
+	if lastParam(calls, "deleteMessage", "message_id") != first {
+		t.Errorf("old notice %s not deleted: %+v", first, calls)
+	}
+	if texts := tg.sent(calls); len(texts) != 1 || !strings.Contains(texts[0], "ошибки") {
+		t.Fatalf("expected an error notice, got %q", texts)
+	}
+	// Всё исправлено - уведомление удаляется, новых сообщений нет
+	second := noticeID()
+	calls = editTo("19.10\nРабота - 8ч\n\n20.10\nРабота - 8ч")
+	if lastParam(calls, "deleteMessage", "message_id") != second || len(tg.sent(calls)) != 0 {
+		t.Fatalf("fixed post: %+v", calls)
+	}
+
+	// "Обновить" на уведомлении делает его статусом: после исправления его не удалить
+	editTo("19.10\nРабота")
+	id, _ := strconv.Atoi(noticeID())
+	b.onCallback(ctx, &models.CallbackQuery{
+		ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: viewStatus,
+		Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: id}},
+	})
+	tg.take()
+	if calls := editTo("19.10\nРабота - 8ч"); countMethod(calls, "deleteMessage") != 0 || len(calls) != 0 {
+		t.Fatalf("refreshed notice was touched: %+v", calls)
 	}
 }
 

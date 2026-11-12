@@ -9,7 +9,6 @@ import (
 	"html"
 	"log/slog"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +64,9 @@ type Bot struct {
 
 	// Апдейты канала обрабатываются по одному
 	postMu sync.Mutex
+	// Уведомления о проблемах в постах по ID поста, под postMu. Только в памяти: после перезапуска
+	// старое уведомление останется висеть, а новое придёт отдельно
+	notices map[int64]postNotice
 	// Идущая отправка: при остановке её нужно дождаться, чтобы туннель погас
 	inflight sync.WaitGroup
 
@@ -277,10 +279,10 @@ func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited boo
 		post.EditedAt = time.Unix(int64(msg.EditDate), 0)
 	}
 
-	known, err := b.store.WeekPostByMessage(ctx, post.ChatID, post.MessageID)
+	_, err := b.store.WeekPostByMessage(ctx, post.ChatID, post.MessageID)
 	switch {
 	case err == nil:
-		b.updateKnownPost(ctx, known, post)
+		b.updateKnownPost(ctx, post)
 	case errors.Is(err, store.ErrNotFound):
 		b.considerNewPost(ctx, post)
 	default:
@@ -288,8 +290,8 @@ func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited boo
 	}
 }
 
-// updateKnownPost сохраняет правку поста недели; prev - сохранённая до неё версия
-func (b *Bot) updateKnownPost(ctx context.Context, prev, post store.WeekPost) {
+// updateKnownPost сохраняет правку поста недели и обновляет уведомление о проблемах в нём
+func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) {
 	saved, updated, err := b.store.SaveWeekPost(ctx, post)
 	if err != nil {
 		slog.Error("save week post", "error", err)
@@ -301,37 +303,77 @@ func (b *Bot) updateKnownPost(ctx context.Context, prev, post store.WeekPost) {
 		return
 	}
 
-	report, err := parser.Parse(saved.Text, b.cfg.DefaultIssue, b.now())
+	b.showNotice(ctx, saved, b.noticeText(ctx, saved))
+}
+
+// postNotice - уведомление о проблемах в посте: у каждого поста не больше одного
+type postNotice struct {
+	messageID int
+	text      string
+}
+
+// noticeText - всё, что сейчас не так с постом: ошибки разбора или предупреждения. Пусто - всё в порядке
+func (b *Bot) noticeText(ctx context.Context, post store.WeekPost) string {
+	report, err := parser.Parse(post.Text, b.cfg.DefaultIssue, b.now())
 	if err != nil {
-		// "Обновить" перерисует это сообщение: после исправления на его месте будет статус недели
-		text := "⚠️ В посте недели ошибки:\n" + formatParseErrors(err)
-		if _, err := b.send(ctx, text, previewKeyboard(previewKeys{PostURL: postURL(saved.ChatID, saved.MessageID)})); err != nil {
-			slog.Error("send post errors", "error", err)
-		}
-		return
+		return "⚠️ В посте недели ошибки:\n" + formatParseErrors(err)
 	}
-	if warning := b.newEmptyDates(prev, report); warning != "" {
-		b.notify(ctx, warning)
+	var parts []string
+	if warning := emptyDatesWarning(report); warning != "" {
+		parts = append(parts, warning)
 	}
 	if warning, err := b.changedSubmitted(ctx, report); err != nil {
 		slog.Error("compare with submitted", "error", err)
 	} else if warning != "" {
-		b.notify(ctx, warning)
+		parts = append(parts, warning)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// showNotice держит у поста одно уведомление. Текст не изменился - бот молчит. Изменился - старое
+// удаляется и приходит новое, внизу чата и с пушем. Всё исправлено - старое просто удаляется
+func (b *Bot) showNotice(ctx context.Context, post store.WeekPost, text string) {
+	old := b.notices[post.ID]
+	if text == old.text {
+		return
+	}
+	if old.messageID != 0 {
+		if err := b.deleteMessage(ctx, b.cfg.OwnerID, old.messageID); err != nil {
+			slog.Warn("delete post notice", "error", err)
+		}
+	}
+	delete(b.notices, post.ID)
+	if text == "" {
+		return
+	}
+	// "Обновить" перерисует уведомление в статус недели, дальше бот его не трогает
+	msg, err := b.send(ctx, text, previewKeyboard(previewKeys{PostURL: postURL(post.ChatID, post.MessageID)}))
+	if err != nil {
+		slog.Error("send post notice", "error", err)
+		return
+	}
+	if b.notices == nil {
+		b.notices = map[int64]postNotice{}
+	}
+	b.notices[post.ID] = postNotice{messageID: msg.ID, text: text}
+}
+
+// forgetNotice - уведомление стало статусом недели по кнопке "Обновить": удалять его больше нельзя
+func (b *Bot) forgetNotice(messageID int) {
+	b.postMu.Lock()
+	defer b.postMu.Unlock()
+	for id, n := range b.notices {
+		if n.messageID == messageID {
+			delete(b.notices, id)
+		}
 	}
 }
 
-// newEmptyDates - предупреждение о датах без записей, появившихся этой правкой. Уже известные пустые
-// даты не повторяются, чтобы не писать на каждую правку, пока день не дописан
-func (b *Bot) newEmptyDates(prev store.WeekPost, report parser.Report) string {
-	var before []time.Time
-	if old, err := parser.Parse(prev.Text, b.cfg.DefaultIssue, b.now()); err == nil {
-		before = old.EmptyDates
-	}
-	var dates []string
-	for _, d := range report.EmptyDates {
-		if !slices.ContainsFunc(before, d.Equal) {
-			dates = append(dates, d.Format("02.01"))
-		}
+// emptyDatesWarning - предупреждение о датах без записей. Это не ошибка: день может быть ещё не дописан
+func emptyDatesWarning(report parser.Report) string {
+	dates := make([]string, len(report.EmptyDates))
+	for i, d := range report.EmptyDates {
+		dates[i] = d.Format("02.01")
 	}
 	switch len(dates) {
 	case 0:
@@ -486,6 +528,7 @@ func (b *Bot) onCallback(ctx context.Context, cq *models.CallbackQuery) {
 			b.sendPreview(ctx, cq.Data == viewSubmit)
 			return
 		}
+		b.forgetNotice(messageID)
 		b.edit(ctx, messageID, text, markup)
 	case cq.Data == viewNew:
 		b.answer(ctx, cq, "", false)
