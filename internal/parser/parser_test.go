@@ -345,7 +345,9 @@ func TestParseWhitespace(t *testing.T) {
 
 func TestLooksLikePost(t *testing.T) {
 	for text, want := range map[string]bool{
-		"19.10\nРабота - 2ч":         true,
+		"@example_bot\n\n19.10\nРабота - 2ч": true,
+		"@example_bot":                   false,
+		"19.10\nРабота - 2ч":             true,
 		"\n\n  ABC-1\n19.10\nРабота":     true,
 		"Купить молоко":                  false,
 		"Заметка про 19.10\n19.10":       false,
@@ -399,5 +401,21 @@ func TestLineErrorMessage(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "строка") {
 		t.Errorf("line numbers are shown: %s", err)
+	}
+}
+
+// Упоминание бота в начале поста - ссылка для возврата в бота, а не запись. После первой даты такая строка
+// уже обычная запись и без времени даёт ошибку
+func TestParseLeadingMention(t *testing.T) {
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	r, err := Parse("@example_bot\n\n19.10\nРабота - 8ч", "ABC-1", now)
+	if err != nil {
+		t.Fatalf("leading mention: %v", err)
+	}
+	if len(r.Worklogs) != 1 || r.Worklogs[0].Duration() != 8*time.Hour {
+		t.Fatalf("worklogs = %+v", r.Worklogs)
+	}
+	if _, err := Parse("19.10\n@example_bot\nРабота - 8ч", "ABC-1", now); err == nil {
+		t.Fatal("mention after the first date was skipped")
 	}
 }

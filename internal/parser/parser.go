@@ -123,6 +123,8 @@ const maxDayDuration = 24 * time.Hour
 var (
 	issueLineRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]*-[0-9]+$`)
 	dateLineRe  = regexp.MustCompile(`^([0-9]{1,2})\.([0-9]{1,2})$`)
+	// Упоминание вида @имя_бота в начале поста: ссылка, чтобы из канала вернуться в бота
+	mentionLineRe = regexp.MustCompile(`^@[A-Za-z0-9_]{5,32}$`)
 )
 
 // Parse разбирает пост. defaultIssue используется, пока в посте не встретилась строка-задача.
@@ -145,6 +147,8 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 		errs = append(errs, &LineError{Line: line, Date: date, Text: text, Msg: fmt.Sprintf(format, args...)})
 	}
 
+	// Встретилась первая дата или задача: дальше упоминания уже не пропускаются
+	started := false
 	for i, raw := range strings.Split(text, "\n") {
 		n := i + 1
 		line := normalizeLine(raw)
@@ -152,12 +156,17 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 		case line == "":
 			continue
 
+		case !started && mentionLineRe.MatchString(line):
+			continue
+
 		case issueLineRe.MatchString(line):
+			started = true
 			issue = line
 			// После смены задачи дата должна быть указана заново, чтобы записи не уехали не туда
 			date, badDate = time.Time{}, false
 
 		case dateLineRe.MatchString(line):
+			started = true
 			d, err := resolveDate(dateLineRe.FindStringSubmatch(line), today)
 			if err != nil {
 				fail(n, time.Time{}, line, "%v", err)
@@ -238,11 +247,12 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 }
 
 // LooksLikePost - похоже ли сообщение на пост с временем: первая непустая строка - дата или ключ задачи.
+// Упоминания в начале поста (ссылка на бота) не считаются
 // Нужно, чтобы бот не принимал за пост недели другие заметки в канале
 func LooksLikePost(text string) bool {
 	for raw := range strings.SplitSeq(text, "\n") {
 		line := normalizeLine(raw)
-		if line == "" {
+		if line == "" || mentionLineRe.MatchString(line) {
 			continue
 		}
 		return dateLineRe.MatchString(line) || issueLineRe.MatchString(line)
