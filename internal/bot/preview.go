@@ -249,11 +249,11 @@ func renderPreview(in previewInput) string {
 		case d.Mismatch:
 			mark = "⚠️"
 		case d.Worklogs > 0 && d.Submitted == d.Worklogs:
-			mark = "✅"
+			mark = "✔️"
 		case d.Submitted > 0:
-			mark = "🌓"
+			mark = "🔸"
 		case d.Worklogs > 0:
-			mark = "⏳"
+			mark = "🔹"
 		}
 		tail := ""
 		note := ""

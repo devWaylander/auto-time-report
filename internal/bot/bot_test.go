@@ -179,8 +179,8 @@ func TestPreviewInputAndRender(t *testing.T) {
 	}
 	for _, want := range []string{
 		"<b>Неделя 19.10-23.10.2026</b>\n\n",
-		"✅ Пн 19.10 - 8ч\n",
-		"⏳ Вт 20.10 - 8ч\n",
+		"✔️ Пн 19.10 - 8ч\n",
+		"🔹 Вт 20.10 - 8ч\n",
 		"▫️ Ср 21.10 -\n",
 		"ABC-1 6ч, ABC-2 2ч",
 		"▫️ Пт 23.10 - <i>(сокращённый)</i> · сегодня",
@@ -255,11 +255,11 @@ func TestRenderShortfall(t *testing.T) {
 		Pending: 1,
 	})
 	for _, want := range []string{
-		"⏳ Пн 19.10 - 8ч\n",
-		"⏳ Вт 20.10 - 6ч из 8ч\n",
-		"⏳ Ср 21.10 - 2ч\n",
-		"⏳ Пт 23.10 - 6ч 30м из 7ч <i>(сокращённый)</i>",
-		"⏳ Сб 24.10 - 2ч <i>(выходной)</i>",
+		"🔹 Пн 19.10 - 8ч\n",
+		"🔹 Вт 20.10 - 6ч из 8ч\n",
+		"🔹 Ср 21.10 - 2ч\n",
+		"🔹 Пт 23.10 - 6ч 30м из 7ч <i>(сокращённый)</i>",
+		"🔹 Сб 24.10 - 2ч <i>(выходной)</i>",
 		"⚠️ Недобор: Вт-2ч, Пт-30м\n",
 	} {
 		if !strings.Contains(text, want) {
@@ -472,7 +472,7 @@ func TestPreviewShowsJiraMismatch(t *testing.T) {
 	}
 	text, _ := b.buildPreview(ctx, false)
 	for _, want := range []string{
-		"✅ Пн 19.10 - 8ч\n",
+		"✔️ Пн 19.10 - 8ч\n",
 		"⚠️ Вт 20.10 - 7ч из 8ч · в Jira 8ч\n",
 		"⚠️ Ср 21.10 - · в Jira 8ч\n",
 	} {
