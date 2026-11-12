@@ -686,3 +686,37 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 		t.Fatalf("no warning for the manual day:\n%s", warn)
 	}
 }
+
+// Часть дня уже в Jira: в отправку уходит только недостающий worklog, записанный не трогается
+func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
+	b, tg, runner, st := newTelegramBot(t)
+	ctx := context.Background()
+	b.onChannelPost(ctx, channelPost("20.10\nРабота - 6ч\n\nXYZ-101\n20.10\nСозвон - 2ч", day(10, 20)), false)
+	saved, err := st.LatestWeekPost(ctx, b.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SaveSubmission(ctx, store.Submission{
+		UserID: b.userID, WeekPostID: saved.ID, IssueKey: "ABC-1", WorkDate: day(10, 20),
+		Duration: 6 * time.Hour, Comment: "Работа - 6ч", WorklogID: 1, PeriodID: 228,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tg.take()
+
+	b.pending = &pendingSubmit{postID: saved.ID, hash: hashText(saved.Text), promptID: 7, expires: fixedClock().Add(time.Minute)}
+	b.onMessage(ctx, dm("Str0ng-Passphrase-XYZ"))
+	tg.take()
+	if len(runner.jobs) != 1 {
+		t.Fatalf("jobs = %d, want 1", len(runner.jobs))
+	}
+	got := runner.jobs[0].Worklogs
+	if len(got) != 1 || got[0].IssueKey != "XYZ-101" || got[0].Duration != 2*time.Hour || !got[0].Date.Equal(day(10, 20)) {
+		t.Fatalf("job worklogs = %+v, want only XYZ-101 20.10 2ч", got)
+	}
+
+	b.onMessage(ctx, dm("/status"))
+	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "✔️ Вт 20.10 - 8ч") || strings.Contains(preview, "К записи") {
+		t.Fatalf("day is not fully written after submit:\n%s", preview)
+	}
+}
