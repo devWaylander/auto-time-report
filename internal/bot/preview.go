@@ -56,6 +56,16 @@ func (w weekState) pendingWorklogs() []parser.Worklog {
 	return out
 }
 
+// worklog - запись поста по задаче и дню
+func (w weekState) worklog(issue string, date time.Time) (parser.Worklog, bool) {
+	for _, wl := range w.report.Worklogs {
+		if wl.IssueKey == issue && sameDay(wl.Date, date) {
+			return wl, true
+		}
+	}
+	return parser.Worklog{}, false
+}
+
 var errNoPost = errors.New("no week post")
 
 // loadWeek читает последний пост и сверяет его с уже записанным. Ошибки формата поста возвращаются как есть
@@ -72,8 +82,9 @@ func (b *Bot) loadWeek(ctx context.Context) (weekState, error) {
 		return weekState{post: post}, err
 	}
 
+	// Целые недели, как в превью: записанный в Jira день мог пропасть из поста
 	dates := report.Dates()
-	subs, err := b.store.SubmissionsBetween(ctx, b.userID, dates[0], dates[len(dates)-1])
+	subs, err := b.store.SubmissionsBetween(ctx, b.userID, weekStart(dates[0]), weekStart(dates[len(dates)-1]).AddDate(0, 0, 6))
 	if err != nil {
 		return weekState{}, err
 	}
@@ -133,7 +144,9 @@ type dayLine struct {
 	Submitted int      // сколько worklog'ов дня уже в Jira
 	Manual    int      // из них найдено в Jira, но поставлено не ботом
 	Worklogs  int
-	Vacation  bool // рабочий день в отпуске из /vacation
+	Vacation  bool          // рабочий день в отпуске из /vacation
+	InJira    time.Duration // сколько за день записано в Jira
+	Mismatch  bool          // в Jira не то, что в посте: время другое или запись из поста пропала
 }
 
 // shortfall - сколько не хватает до нормы дня; ноль - день пустой, в отпуске или норма набрана
@@ -186,6 +199,15 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 		if len(line.Issues) < 2 {
 			line.Issues = nil
 		}
+		for _, s := range w.submitted {
+			if !sameDay(s.WorkDate, d) {
+				continue
+			}
+			line.InJira += s.Duration
+			if wl, ok := w.worklog(s.IssueKey, d); !ok || wl.Duration() != s.Duration {
+				line.Mismatch = true
+			}
+		}
 
 		in.Norm += kind.Norm()
 		in.Total += line.Total
@@ -195,7 +217,7 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 				in.Missing = append(in.Missing, d)
 			}
 		}
-		if kind != calendar.Off || line.Total > 0 {
+		if kind != calendar.Off || line.Total > 0 || line.InJira > 0 {
 			in.Days = append(in.Days, line)
 		}
 	}
@@ -224,6 +246,8 @@ func renderPreview(in previewInput) string {
 		// Значок в начале каждой строки: эмодзи выше текста, и строки без него выходили бы ниже остальных
 		mark := "▫️"
 		switch {
+		case d.Mismatch:
+			mark = "⚠️"
 		case d.Worklogs > 0 && d.Submitted == d.Worklogs:
 			mark = "✅"
 		case d.Submitted > 0:
@@ -249,6 +273,9 @@ func renderPreview(in previewInput) string {
 		}
 		if d.Manual > 0 {
 			tail += " вручную"
+		}
+		if d.Mismatch {
+			tail += " · в Jira " + parser.FormatDuration(d.InJira)
 		}
 		if d.Date.Equal(in.Today) {
 			tail += " · сегодня"

@@ -451,3 +451,33 @@ func TestPreviewErrorsHavePostButton(t *testing.T) {
 		t.Errorf("errors keyboard = %+v, want refresh and post", rows)
 	}
 }
+
+// День, где в Jira не то, что в посте, помечен и показывает время из Jira, в том числе если запись из
+// поста пропала
+func TestPreviewShowsJiraMismatch(t *testing.T) {
+	b, st := newTestBot(t, nil)
+	ctx := context.Background()
+	post := "19.10\nРабота - 8ч\n\n20.10\nРабота - 7ч"
+	saved, _, err := st.SaveWeekPost(ctx, store.WeekPost{UserID: b.userID, ChatID: -100, MessageID: 1, Text: post, PostedAt: day(10, 19)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, d := range []int{19, 20, 21} {
+		if _, err := st.SaveSubmission(ctx, store.Submission{
+			UserID: b.userID, WeekPostID: saved.ID, IssueKey: "ABC-1", WorkDate: day(10, d),
+			Duration: 8 * time.Hour, Comment: "x", WorklogID: int64(i + 1), PeriodID: 228,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	text, _ := b.buildPreview(ctx, false)
+	for _, want := range []string{
+		"✅ Пн 19.10 - 8ч\n",
+		"⚠️ Вт 20.10 - 7ч из 8ч · в Jira 8ч\n",
+		"⚠️ Ср 21.10 - · в Jira 8ч\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("preview has no %q:\n%s", want, text)
+		}
+	}
+}

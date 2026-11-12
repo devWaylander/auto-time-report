@@ -675,8 +675,8 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 
 	b.onMessage(ctx, dm("/status"))
 	preview := strings.Join(tg.sent(tg.take()), "\n")
-	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "✅ Пн 19.10 - 8ч вручную") {
-		t.Fatalf("manual day is not counted as written:\n%s", preview)
+	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "⚠️ Пн 19.10 - 8ч вручную · в Jira 6ч") {
+		t.Fatalf("manual day is not counted as written or its mismatch is hidden:\n%s", preview)
 	}
 
 	// Правка поста по такому дню - то же предупреждение, что и для записей бота
