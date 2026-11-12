@@ -519,7 +519,7 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 
 	b.onMessage(ctx, dm("/status"))
 	preview := strings.Join(tg.sent(tg.take()), "\n")
-	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "Пн 19.10 - 8ч ✅ вручную") {
+	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "✅ Пн 19.10 - 8ч вручную") {
 		t.Fatalf("manual day is not counted as written:\n%s", preview)
 	}
 

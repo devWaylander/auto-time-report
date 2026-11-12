@@ -223,13 +223,17 @@ func renderPreview(in previewInput) string {
 	b.WriteString("\n\n")
 
 	for _, d := range in.Days {
-		mark := ""
+		// Значок в начале каждой строки: эмодзи выше текста, и строки без него выходили бы ниже остальных
+		mark := "▫️"
 		switch {
 		case d.Worklogs > 0 && d.Submitted == d.Worklogs:
-			mark = " ✅"
+			mark = "✅"
 		case d.Submitted > 0:
-			mark = " ◐"
+			mark = "🌓"
+		case d.Worklogs > 0:
+			mark = "⏳"
 		}
+		tail := ""
 		note := ""
 		switch {
 		case d.Kind == calendar.Off && d.Total > 0:
@@ -243,15 +247,15 @@ func renderPreview(in previewInput) string {
 			total = "- " + parser.FormatDuration(d.Total)
 		}
 		if d.shortfall() > 0 {
-			total += " ⚠️ из " + parser.FormatDuration(d.Kind.Norm())
+			total += " из " + parser.FormatDuration(d.Kind.Norm())
 		}
 		if d.Manual > 0 {
-			mark += " вручную"
+			tail += " вручную"
 		}
 		if d.Date.Equal(in.Today) {
-			mark += " · сегодня"
+			tail += " · сегодня"
 		}
-		fmt.Fprintf(&b, "%s %s %s%s%s\n", weekdays[d.Date.Weekday()], d.Date.Format("02.01"), total, note, mark)
+		fmt.Fprintf(&b, "%s %s %s %s%s%s\n", mark, weekdays[d.Date.Weekday()], d.Date.Format("02.01"), total, note, tail)
 		if len(d.Issues) > 0 {
 			fmt.Fprintf(&b, "    <i>%s</i>\n", html.EscapeString(strings.Join(d.Issues, ", ")))
 		}
