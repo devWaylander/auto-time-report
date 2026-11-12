@@ -78,12 +78,40 @@ func (b *Bot) onSubmitButton(ctx context.Context, cq *models.CallbackQuery, mess
 		return
 	}
 
-	b.mu.Lock()
-	b.pending = &pendingSubmit{
+	p := &pendingSubmit{
 		postID: postID, hash: hash, approve: approve,
 		promptID: prompt.ID, expires: b.clock().Add(passphraseTimeout),
 	}
+	b.mu.Lock()
+	old := b.pending
+	b.pending = p
 	b.mu.Unlock()
+	if old != nil {
+		// Повторное нажатие: ждём только последнюю фразу, прежний запрос не должен висеть в чате
+		if err := b.deleteMessage(ctx, b.cfg.OwnerID, old.promptID); err != nil {
+			slog.Error("delete passphrase prompt", "error", err)
+		}
+	}
+	time.AfterFunc(passphraseTimeout, func() { b.expirePending(p) })
+}
+
+// expirePending снимает ожидание фразы по истечении времени: запрос удаляется, чтобы на него не ответили
+// позже. Если фразу уже приняли, отменили или нажали отправку снова, ничего не делает
+func (b *Bot) expirePending(p *pendingSubmit) {
+	b.mu.Lock()
+	if b.pending != p {
+		b.mu.Unlock()
+		return
+	}
+	b.pending = nil
+	b.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := b.deleteMessage(ctx, b.cfg.OwnerID, p.promptID); err != nil {
+		slog.Error("delete passphrase prompt", "error", err)
+	}
+	b.notify(ctx, "⌛ Время на пароль-фразу истекло, нужна повторная отправка")
 }
 
 // refusalLocked - причина не начинать отправку; вызывать под b.mu

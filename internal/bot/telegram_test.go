@@ -364,6 +364,55 @@ func TestExpiredPassphraseIsDeletedNotUsed(t *testing.T) {
 	}
 }
 
+// Запрос фразы не висит дольше срока: по таймеру он удаляется, а сообщение после этого фразой не считается
+func TestPendingExpiresByTimer(t *testing.T) {
+	b, tg, runner, _ := newTelegramBot(t)
+	p := &pendingSubmit{postID: 1, hash: "x", promptID: 7, expires: fixedClock().Add(time.Minute)}
+	b.pending = p
+
+	// Таймер от прежнего нажатия не трогает новое ожидание
+	b.expirePending(&pendingSubmit{promptID: 6})
+	if b.pending != p || len(tg.take()) != 0 {
+		t.Fatal("stale timer touched the current prompt")
+	}
+
+	b.expirePending(p)
+	calls := tg.take()
+	if b.pending != nil || lastParam(calls, "deleteMessage", "message_id") != "7" {
+		t.Fatalf("prompt not expired: %+v", calls)
+	}
+	if texts := tg.sent(calls); len(texts) != 1 || !strings.Contains(texts[0], "истекло") {
+		t.Fatalf("expected expiry notice, got %q", texts)
+	}
+	b.onMessage(context.Background(), dm("late passphrase"))
+	if runner.passphrase != "" {
+		t.Fatal("message after expiry was used as passphrase")
+	}
+	tg.take()
+}
+
+// Повторное нажатие отправки заменяет запрос фразы: прежний удаляется
+func TestSecondSubmitReplacesPrompt(t *testing.T) {
+	b, tg, _, st := newTelegramBot(t)
+	ctx := context.Background()
+	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8ч", day(10, 19)), false)
+	saved, err := st.LatestWeekPost(ctx, b.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.pending = &pendingSubmit{postID: saved.ID, hash: hashText(saved.Text), promptID: 7, expires: fixedClock().Add(time.Minute)}
+	tg.take()
+
+	b.onCallback(ctx, &models.CallbackQuery{
+		ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: fmt.Sprintf("%s%d:%s:0", submitPrefix, saved.ID, hashText(saved.Text)),
+	})
+	calls := tg.take()
+	if lastParam(calls, "deleteMessage", "message_id") != "7" || b.pending == nil || b.pending.promptID == 7 {
+		t.Fatalf("old prompt not replaced: %+v", calls)
+	}
+	b.pending = nil
+}
+
 func TestStrayTextAndUnknownCommandsAreDeleted(t *testing.T) {
 	b, tg, _, _ := newTelegramBot(t)
 	for _, text := range []string{"просто текст", "/whatever"} {
