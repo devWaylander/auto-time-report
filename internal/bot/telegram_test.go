@@ -904,3 +904,43 @@ func TestBotButtonUnderWeekPost(t *testing.T) {
 		t.Fatalf("bot keeps trying after a refusal: %+v", calls)
 	}
 }
+
+func TestBotButtonMovesToNewWeek(t *testing.T) {
+	b, tg, runner, st := newTelegramBot(t)
+	ctx := context.Background()
+	old := bareChannelPost("23.10\nРабота - 8ч", day(10, 23))
+	other := models.InlineKeyboardButton{Text: "Справка", URL: "https://example.com/help"}
+	old.ReplyMarkup = &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{other}}}
+	b.onChannelPost(ctx, old, false)
+	initial := lastParam(tg.take(), "editMessageReplyMarkup", "reply_markup")
+	if !strings.Contains(initial, testBotURL) || !strings.Contains(initial, other.URL) {
+		t.Fatalf("button was not added beside the existing keyboard: %s", initial)
+	}
+
+	restarted, err := New(b.cfg, st, b.cal, runner, b.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = restarted
+	b.clock = func() time.Time { return day(10, 26) }
+	tg.take()
+
+	next := bareChannelPost("26.10\nРабота - 8ч", day(10, 26))
+	b.onChannelPost(ctx, next, false)
+	var edited []apiCall
+	for _, call := range tg.take() {
+		if call.method == "editMessageReplyMarkup" {
+			edited = append(edited, call)
+		}
+	}
+	if len(edited) != 2 ||
+		edited[0].params["message_id"] != fmt.Sprint(next.ID) || !strings.Contains(edited[0].params["reply_markup"], testBotURL) ||
+		edited[1].params["message_id"] != fmt.Sprint(old.ID) || strings.Contains(edited[1].params["reply_markup"], testBotURL) ||
+		!strings.Contains(edited[1].params["reply_markup"], other.URL) {
+		t.Fatalf("button did not move while preserving the old keyboard: %+v", edited)
+	}
+	b.onChannelPost(ctx, edit(old, "23.10\nРабота - 7ч", day(10, 26)), true)
+	if calls := tg.take(); countMethod(calls, "editMessageReplyMarkup") != 0 {
+		t.Fatalf("editing the old post moved the button back: %+v", calls)
+	}
+}

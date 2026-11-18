@@ -4,6 +4,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -300,30 +301,34 @@ func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited boo
 	_, err := b.store.WeekPostByMessage(ctx, post.ChatID, post.MessageID)
 	switch {
 	case err == nil:
-		b.updateKnownPost(ctx, post)
-		b.ensureBotButton(ctx, msg)
+		if !b.updateKnownPost(ctx, post) {
+			return
+		}
 	case errors.Is(err, store.ErrNotFound):
-		if parser.LooksLikePost(post.Text) && b.considerNewPost(ctx, post) {
-			b.ensureBotButton(ctx, msg)
+		if !parser.LooksLikePost(post.Text) || !b.considerNewPost(ctx, post) {
+			return
 		}
 	default:
 		slog.Error("find week post", "error", err)
+		return
 	}
+	b.syncBotButton(ctx, msg)
 }
 
 // updateKnownPost сохраняет правку поста недели и обновляет его живое сообщение
-func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) {
+func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) bool {
 	saved, updated, err := b.store.SaveWeekPost(ctx, post)
 	if err != nil {
 		slog.Error("save week post", "error", err)
 		b.notify(ctx, "⚠️ Правка поста недели не сохранена, подробности в логах бота")
-		return
+		return false
 	}
 	if !updated {
 		// Пришла версия старше сохранённой
-		return
+		return false
 	}
 	b.onPostChanged(ctx, saved)
+	return true
 }
 
 // liveMessage - последнее предупреждение о старом посте
@@ -575,15 +580,26 @@ func (b *Bot) botLink(ctx context.Context) (string, error) {
 	return link, nil
 }
 
-// ensureBotButton вешает под постом недели кнопку возврата в бота, если её там ещё нет. Своя правка кнопки
-// приходит боту как правка поста, уже с кнопкой: повторно её не вешаем, поэтому цикла нет. Telegram может
-// не разрешить (у бота нет права редактировать сообщения канала): тогда бот пишет в лог и до перезапуска
-// больше не пытается
-func (b *Bot) ensureBotButton(ctx context.Context, msg *models.Message) {
+const botButtonText = "🤖 В бота"
+
+// syncBotButton сначала ставит кнопку под текущим постом, затем восстанавливает клавиатуру старого
+func (b *Bot) syncBotButton(ctx context.Context, msg *models.Message) {
 	b.mu.Lock()
 	off := b.buttonOff
 	b.mu.Unlock()
 	if off {
+		return
+	}
+	current, err := b.currentWeekPost(ctx)
+	if errors.Is(err, store.ErrNotFound) {
+		return
+	}
+	if err != nil {
+		slog.Warn("load week for channel button", "error", err)
+		return
+	}
+	isCurrent := current.ChatID == msg.Chat.ID && current.MessageID == int64(msg.ID)
+	if !isCurrent && msg.ReplyMarkup == nil {
 		return
 	}
 	link, err := b.botLink(ctx)
@@ -591,28 +607,113 @@ func (b *Bot) ensureBotButton(ctx context.Context, msg *models.Message) {
 		slog.Warn("bot link for post button", "error", err)
 		return
 	}
-	if msg.ReplyMarkup != nil {
-		for _, row := range msg.ReplyMarkup.InlineKeyboard {
-			for _, btn := range row {
-				if btn.URL == link {
-					return
-				}
-			}
+	base, attached := stripBotButton(msg.ReplyMarkup, link)
+	if !isCurrent {
+		if attached {
+			b.removeBotButtonFromEditedPost(ctx, msg, base, current.ID)
+		}
+		return
+	}
+
+	buttons, err := b.store.ChannelBotButtons(ctx, b.userID)
+	if err != nil {
+		slog.Warn("load channel buttons", "error", err)
+		return
+	}
+	if !attached {
+		markup := base
+		markup.InlineKeyboard = append(markup.InlineKeyboard, []models.InlineKeyboardButton{{Text: botButtonText, URL: link}})
+		if err := b.editChannelMarkup(ctx, msg.Chat.ID, int64(msg.ID), markup); err != nil {
+			slog.Warn("attach bot button to week post", "error", err)
+			b.mu.Lock()
+			b.buttonOff = true
+			b.mu.Unlock()
+			return
 		}
 	}
-	_, err = b.api.EditMessageReplyMarkup(ctx, &tgbot.EditMessageReplyMarkupParams{
-		ChatID:    msg.Chat.ID,
-		MessageID: msg.ID,
-		ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-			{{Text: "🤖 В бота", URL: link}},
-		}},
+	encoded, err := json.Marshal(base)
+	if err != nil {
+		slog.Warn("encode channel keyboard", "error", err)
+		return
+	}
+	original := string(encoded)
+	if err := b.store.SetChannelBotButton(ctx, current.ID, &original); err != nil {
+		slog.Warn("remember channel button", "error", err)
+		return
+	}
+	for _, button := range buttons {
+		if button.PostID == current.ID {
+			continue
+		}
+		var markup models.InlineKeyboardMarkup
+		if err := json.Unmarshal([]byte(button.Base), &markup); err != nil {
+			slog.Warn("decode channel keyboard", "error", err)
+			continue
+		}
+		b.removeChannelBotButton(ctx, button.PostID, button.ChatID, button.MessageID, markup)
+	}
+}
+
+// stripBotButton сохраняет соседние кнопки и порядок строк
+func stripBotButton(markup *models.InlineKeyboardMarkup, link string) (models.InlineKeyboardMarkup, bool) {
+	base := models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
+	if markup == nil {
+		return base, false
+	}
+	attached := false
+	for _, row := range markup.InlineKeyboard {
+		var buttons []models.InlineKeyboardButton
+		for _, button := range row {
+			if button.Text == botButtonText && button.URL == link {
+				attached = true
+				continue
+			}
+			buttons = append(buttons, button)
+		}
+		if len(buttons) > 0 {
+			base.InlineKeyboard = append(base.InlineKeyboard, buttons)
+		}
+	}
+	return base, attached
+}
+
+// removeBotButtonFromEditedPost снимает прежнюю кнопку, если она видна в правке и новая уже установлена
+func (b *Bot) removeBotButtonFromEditedPost(ctx context.Context, msg *models.Message, base models.InlineKeyboardMarkup, currentID int64) {
+	buttons, err := b.store.ChannelBotButtons(ctx, b.userID)
+	if err != nil {
+		slog.Warn("load channel buttons", "error", err)
+		return
+	}
+	for _, button := range buttons {
+		if button.PostID == currentID {
+			post, err := b.store.WeekPostByMessage(ctx, msg.Chat.ID, int64(msg.ID))
+			if err == nil {
+				b.removeChannelBotButton(ctx, post.ID, post.ChatID, post.MessageID, base)
+			}
+			return
+		}
+	}
+}
+
+func (b *Bot) removeChannelBotButton(ctx context.Context, postID, chatID, messageID int64, base models.InlineKeyboardMarkup) {
+	err := b.editChannelMarkup(ctx, chatID, messageID, base)
+	if err != nil && !strings.Contains(err.Error(), "message to edit not found") {
+		slog.Warn("remove bot button from old post", "error", err)
+		return
+	}
+	if err := b.store.SetChannelBotButton(ctx, postID, nil); err != nil {
+		slog.Warn("forget old channel button", "error", err)
+	}
+}
+
+func (b *Bot) editChannelMarkup(ctx context.Context, chatID, messageID int64, markup models.InlineKeyboardMarkup) error {
+	_, err := b.api.EditMessageReplyMarkup(ctx, &tgbot.EditMessageReplyMarkupParams{
+		ChatID: chatID, MessageID: int(messageID), ReplyMarkup: markup,
 	})
 	if err != nil && !strings.Contains(err.Error(), "message is not modified") {
-		slog.Warn("attach bot button to week post", "error", b.redact(err.Error()))
-		b.mu.Lock()
-		b.buttonOff = true
-		b.mu.Unlock()
+		return errors.New(b.redact(err.Error()))
 	}
+	return nil
 }
 
 // changedSubmitted предупреждает о правках в днях, которые уже записаны в Jira: бот их не перезаписывает

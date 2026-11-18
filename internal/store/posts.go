@@ -109,3 +109,37 @@ func parseNullDate(s sql.NullString) (time.Time, error) {
 	}
 	return parseDate(s.String)
 }
+
+// ChannelBotButton - клавиатура поста без кнопки возврата в бота
+type ChannelBotButton struct {
+	PostID    int64
+	ChatID    int64
+	MessageID int64
+	Base      string
+}
+
+func (s *Store) ChannelBotButtons(ctx context.Context, userID int64) ([]ChannelBotButton, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, chat_id, message_id, bot_button_base FROM week_posts
+		WHERE user_id = ? AND bot_button_base IS NOT NULL`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list channel bot buttons: %w", err)
+	}
+	defer rows.Close()
+	var buttons []ChannelBotButton
+	for rows.Next() {
+		var button ChannelBotButton
+		if err := rows.Scan(&button.PostID, &button.ChatID, &button.MessageID, &button.Base); err != nil {
+			return nil, fmt.Errorf("scan channel bot button: %w", err)
+		}
+		buttons = append(buttons, button)
+	}
+	return buttons, rows.Err()
+}
+
+func (s *Store) SetChannelBotButton(ctx context.Context, postID int64, base *string) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE week_posts SET bot_button_base = ? WHERE id = ?`, base, postID); err != nil {
+		return fmt.Errorf("set channel bot button: %w", err)
+	}
+	return nil
+}
