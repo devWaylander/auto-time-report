@@ -71,6 +71,7 @@ func (w weekState) worklog(issue string, date time.Time) (parser.Worklog, bool) 
 var errNoPost = errors.New("no week post")
 
 const noWeekPostText = "Поста текущей недели в канале пока нет"
+const emptyWeekPostText = "Пост недели найден, записей пока нет"
 
 func (b *Bot) currentWeekPost(ctx context.Context) (store.WeekPost, error) {
 	return b.store.WeekPostForWeek(ctx, b.userID, calendar.WeekStart(b.now()))
@@ -154,6 +155,8 @@ func (b *Bot) viewOf(ctx context.Context, w weekState, err error, submit bool, h
 	case errors.Is(err, errNoPost):
 		keys.ChannelURL = b.weekChannelURL(ctx)
 		return weekView{text: noWeekPostText, markup: previewKeyboard(keys)}
+	case errors.Is(err, parser.ErrNoEntries):
+		return weekView{text: withHeader(emptyWeekPostText), markup: previewKeyboard(keys), live: true}
 	case err != nil && w.post.ID != 0:
 		problems := "⚠️ В посте недели ошибки:\n" + formatParseErrors(err)
 		return weekView{text: withHeader(problems), markup: previewKeyboard(keys), problems: problems, live: true}

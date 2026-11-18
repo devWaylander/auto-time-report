@@ -276,9 +276,8 @@ func (b *Bot) answer(ctx context.Context, cq *models.CallbackQuery, text string,
 }
 
 // onChannelPost следит за постом недели. Правки уже известного поста принимаются всегда, даже если первая
-// строка перестала быть датой или ключом: об этом скажет уведомление. Новое сообщение становится постом недели,
-// только если похоже на пост, разбирается без ошибок и относится к более поздней неделе, чем текущий пост:
-// так заметки в канале его не перехватят. Остальные сообщения молча игнорируются и в базу не попадают
+// строка перестала быть датой или ключом: об этом скажет уведомление. Новый пост с датой текущей недели
+// принимается даже с пустыми днями или ошибками. Обычные заметки в базу не попадают
 func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited bool) {
 	if msg.Chat.ID != b.cfg.ChannelID || msg.Text == "" {
 		return
@@ -427,8 +426,9 @@ func (b *Bot) onPostChanged(ctx context.Context, post store.WeekPost) {
 		return
 	}
 	next.Problems = v.problems
-	// Новая проблема приходит с пушем; сообщение об отсутствии поста превращается в предпросмотр на месте
-	if sameWeek && (active.PostID == 0 || v.problems == "" || active.PostID == post.ID && v.problems == active.Problems) {
+	// Пустой пост обновляет текущий статус без пуша, даже при смене недели
+	if errors.Is(err, parser.ErrNoEntries) || sameWeek && (v.problems == "" ||
+		active.PostID == 0 && err == nil || active.PostID == post.ID && v.problems == active.Problems) {
 		next.MessageID = active.MessageID
 	}
 	if err := b.showActive(ctx, v, next); err != nil {
@@ -524,12 +524,22 @@ func emptyDatesWarning(report parser.Report) string {
 
 // considerNewPost принимает новое сообщение как пост недели, если оно подходит; true - принято
 func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) bool {
-	report, err := parser.Parse(post.Text, b.cfg.DefaultIssue, b.now())
-	if err != nil {
+	now := b.now()
+	date := parser.FirstPostDate(post.Text, now)
+	if date.IsZero() {
 		return false
 	}
-	dates := report.Dates()
-	post.WeekStart = calendar.WeekStart(dates[len(dates)-1])
+	week := calendar.WeekStart(now)
+	post.WeekStart = calendar.WeekStart(date)
+	if post.WeekStart.After(week) {
+		return false
+	}
+	if post.WeekStart.Before(week) {
+		// За прошлые недели по-прежнему принимаем только готовые посты
+		if _, err := parser.Parse(post.Text, b.cfg.DefaultIssue, now); err != nil {
+			return false
+		}
+	}
 	current, err := b.store.LatestWeekPost(ctx, b.userID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -553,7 +563,6 @@ func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) bool {
 		b.notify(ctx, "⚠️ Пост недели не сохранён, подробности в логах бота")
 		return false
 	}
-	// Ошибок в принятом посте нет, но предупреждения (пустая дата) уже могут быть
 	b.onPostChanged(ctx, saved)
 	return true
 }

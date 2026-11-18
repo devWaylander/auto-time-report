@@ -120,6 +120,9 @@ func (e *LineError) Error() string {
 
 const maxDayDuration = 24 * time.Hour
 
+// ErrNoEntries означает, что в посте пока нет записей
+var ErrNoEntries = errors.New("в посте нет ни одной записи")
+
 var (
 	issueLineRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]*-[0-9]+$`)
 	dateLineRe  = regexp.MustCompile(`^([0-9]{1,2})\.([0-9]{1,2})$`)
@@ -241,7 +244,7 @@ func Parse(text, defaultIssue string, now time.Time) (Report, error) {
 		return Report{}, errors.Join(errs...)
 	}
 	if len(report.Worklogs) == 0 {
-		return Report{}, errors.New("в посте нет ни одной записи")
+		return Report{}, ErrNoEntries
 	}
 	return report, nil
 }
@@ -258,6 +261,24 @@ func LooksLikePost(text string) bool {
 		return dateLineRe.MatchString(line) || issueLineRe.MatchString(line)
 	}
 	return false
+}
+
+// FirstPostDate читает дату в начале поста после упоминания и ключа задачи
+func FirstPostDate(text string, now time.Time) time.Time {
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	for raw := range strings.SplitSeq(text, "\n") {
+		line := normalizeLine(raw)
+		if line == "" || mentionLineRe.MatchString(line) || issueLineRe.MatchString(line) {
+			continue
+		}
+		if parts := dateLineRe.FindStringSubmatch(line); parts != nil {
+			// Дата нужна для определения недели, ошибку проверит Parse
+			date, _ := resolveDate(parts, today)
+			return date
+		}
+		break
+	}
+	return time.Time{}
 }
 
 // normalizeLine убирает пробелы по краям, неразрывные пробелы и BOM, который добавляют некоторые клиенты
@@ -318,7 +339,7 @@ func resolveDate(m []string, today time.Time) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("дата %s не существует", label)
 	}
 	if best.After(today) {
-		return time.Time{}, fmt.Errorf("дата %s в будущем", best.Format("02.01.2006"))
+		return best, fmt.Errorf("дата %s в будущем", best.Format("02.01.2006"))
 	}
 	return best, nil
 }

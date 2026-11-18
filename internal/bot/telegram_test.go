@@ -16,6 +16,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/devWaylander/auto-time-report/internal/corp"
+	"github.com/devWaylander/auto-time-report/internal/notify"
 	"github.com/devWaylander/auto-time-report/internal/secret"
 	"github.com/devWaylander/auto-time-report/internal/store"
 )
@@ -411,16 +412,26 @@ func TestNextWeekPostAndLateFix(t *testing.T) {
 	old = edit(old, "19.10\nРабота - 8ч\n\n26.10\nСозвон - 1ч", day(10, 26))
 	b.onChannelPost(ctx, old, true)
 
-	// Новый пост с опечаткой игнорируется, после исправления становится постом недели
-	next := channelPost("26.10\nРабота", day(10, 26))
+	// Новый пост определяется по дате, ошибку во времени бот показывает в личке
+	tg.take()
+	next := channelPost("26.10\nРабота - 8 часов", day(10, 26))
 	b.onChannelPost(ctx, next, false)
-	if latestText(t, b) != old.Text {
-		t.Fatal("broken new post was accepted")
+	if latestText(t, b) != next.Text {
+		t.Fatal("new post was ignored because of a format error")
 	}
+	calls := tg.take()
+	if text := lastParam(calls, "sendMessage", "text"); !strings.Contains(text, "ожидается формат времени") ||
+		!strings.Contains(text, "26.10") || strings.Contains(lastParam(calls, "sendMessage", "reply_markup"), `"callback_data":"`+submitPrefix) {
+		t.Fatalf("new post does not show the format error: %+v", calls)
+	}
+	activeID := liveID(b)
 	fixed := edit(next, "26.10\nРабота - 8ч", day(10, 27))
 	b.onChannelPost(ctx, fixed, true)
 	if latestText(t, b) != fixed.Text {
 		t.Fatalf("fixed new post not accepted, latest = %q", latestText(t, b))
+	}
+	if calls := tg.take(); !inPlace(calls, activeID, "Неделя 26.10") {
+		t.Fatalf("fix did not update the same preview: %+v", calls)
 	}
 
 	// Правка поста прошлой недели сохраняется, но постом недели остаётся новый
@@ -433,6 +444,78 @@ func TestNextWeekPostAndLateFix(t *testing.T) {
 		t.Fatalf("last week's post edit not saved: %+v %v", stored, err)
 	}
 	tg.take()
+}
+
+func TestDateStartsNewWeekPost(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	ctx := context.Background()
+	b.clock = func() time.Time { return day(11, 13) }
+	old := channelPost("09.11\nРевью кода - 8ч", day(11, 9))
+	old.Chat.ID = -1001234567890
+	b.cfg.ChannelID = old.Chat.ID
+	b.onChannelPost(ctx, old, false)
+	b.onMessage(ctx, dm("/status"))
+	live := liveID(b)
+	tg.take()
+	b.clock = func() time.Time { return day(11, 18) }
+
+	for _, text := range []string{"Заметка о встрече\n16.11", "13.11\nРевью кода - 8ч\n16.11", "23.11"} {
+		note := channelPost(text, day(11, 18))
+		note.Chat.ID = old.Chat.ID
+		b.onChannelPost(ctx, note, false)
+		if latestText(t, b) != old.Text || len(tg.take()) != 0 {
+			t.Fatalf("the note %q replaced the week post", text)
+		}
+	}
+
+	next := channelPost("16.11", day(11, 18))
+	next.Chat.ID = old.Chat.ID
+	b.onChannelPost(ctx, next, false)
+	calls := tg.take()
+	if latestText(t, b) != next.Text || !inPlace(calls, live, emptyWeekPostText) {
+		t.Fatalf("the date did not start the current week post: %+v", calls)
+	}
+	if savedID := b.active.PostID; savedID == 0 {
+		t.Fatal("the new post is not tracked")
+	}
+
+	// Второй пост той же недели не перехватывает уже начатый
+	duplicate := channelPost("18.11\nРабота - 8ч", day(11, 18))
+	duplicate.Chat.ID = old.Chat.ID
+	b.onChannelPost(ctx, duplicate, false)
+	if latestText(t, b) != next.Text || len(tg.take()) != 0 {
+		t.Fatal("another post replaced the current week")
+	}
+
+	b.onMessage(ctx, dm("/submit"))
+	calls = tg.take()
+	if text := lastParam(calls, "sendMessage", "text"); text != emptyWeekPostText ||
+		strings.Contains(lastParam(calls, "sendMessage", "reply_markup"), `"callback_data":"`+submitPrefix) {
+		t.Fatalf("a post with just a date can be submitted: %+v", calls)
+	}
+
+	location := b.cfg.Location
+	notifier := notify.New(b.store, b.cal, b, location, b.userID, b.cfg.DefaultIssue)
+	beforeReminder := time.Date(2026, 11, 18, 18, 59, 0, 0, location)
+	if err := notifier.Tick(ctx, beforeReminder); err != nil {
+		t.Fatal(err)
+	}
+	if calls := tg.take(); len(calls) != 0 {
+		t.Fatalf("the reminder was sent early: %+v", calls)
+	}
+	for _, offset := range []time.Duration{time.Minute, 2 * time.Minute} {
+		if err := notifier.Tick(ctx, beforeReminder.Add(offset)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls = tg.take()
+	if text := lastParam(calls, "sendMessage", "text"); countMethod(calls, "sendMessage") != 1 ||
+		!strings.Contains(text, "отсутствуют записи за сегодня (ср 18.11)") {
+		t.Fatalf("expected one daily reminder for the empty post: %+v", calls)
+	}
+	if markup := lastParam(calls, "sendMessage", "reply_markup"); !strings.Contains(markup, postURL(next.Chat.ID, int64(next.ID))) {
+		t.Fatalf("the reminder does not link to the post: %s", markup)
+	}
 }
 
 func TestMissingCurrentWeekPost(t *testing.T) {
