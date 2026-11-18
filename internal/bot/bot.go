@@ -788,10 +788,12 @@ func (b *Bot) onMessage(ctx context.Context, msg *models.Message) {
 	switch cmd {
 	case "/start", "/help":
 		b.notify(ctx, helpText)
-	case "/status":
-		b.sendPreview(ctx, false)
-	case "/submit":
-		b.sendPreview(ctx, true)
+	case "/status", "/submit":
+		if b.sendPreview(ctx, cmd == "/submit") {
+			if err := b.deleteMessage(ctx, msg.Chat.ID, msg.ID); err != nil {
+				slog.Warn("delete preview command", "error", err)
+			}
+		}
 	case "/settings":
 		b.sendSettings(ctx)
 	case "/daily":

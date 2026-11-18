@@ -120,11 +120,13 @@ func (b *Bot) loadWeekOf(ctx context.Context, post store.WeekPost) (weekState, e
 	return w, nil
 }
 
-// sendPreview присылает превью недели; submit - с кнопками отправки
-func (b *Bot) sendPreview(ctx context.Context, submit bool) {
+// sendPreview присылает превью недели и сообщает, удалось ли его показать
+func (b *Bot) sendPreview(ctx context.Context, submit bool) bool {
 	if err := b.showPreview(ctx, submit, ""); err != nil {
 		slog.Error("send preview", "error", err)
+		return false
 	}
+	return true
 }
 
 func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.ReplyMarkup) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,8 @@ type fakeTelegram struct {
 	editsFail bool
 	// Telegram больше не даёт удалить старое сообщение
 	deletesFail bool
+	// Telegram не принимает новое сообщение
+	sendsFail bool
 	// Кнопку под постом канала повесить нельзя: у бота нет права редактировать сообщения
 	markupFails bool
 }
@@ -55,7 +58,7 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.nextID++
 	id := f.nextID
 	chatInfo := f.chatInfo
-	editsFail, deletesFail, markupFails := f.editsFail, f.deletesFail, f.markupFails
+	editsFail, deletesFail, sendsFail, markupFails := f.editsFail, f.deletesFail, f.sendsFail, f.markupFails
 	f.mu.Unlock()
 
 	if markupFails && method == "editMessageReplyMarkup" {
@@ -69,6 +72,10 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if deletesFail && method == "deleteMessage" {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message can't be deleted"})
+		return
+	}
+	if sendsFail && method == "sendMessage" {
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 500, "description": "Internal Server Error"})
 		return
 	}
 
@@ -319,7 +326,9 @@ func TestLiveMessage(t *testing.T) {
 	// /submit становится живым и остаётся с кнопками записи после правок
 	b.onMessage(ctx, dm("/submit"))
 	calls = tg.take()
-	if lastParam(calls, "deleteMessage", "message_id") != e {
+	if !slices.ContainsFunc(calls, func(c apiCall) bool {
+		return c.method == "deleteMessage" && c.params["message_id"] == e
+	}) {
 		t.Fatalf("previous live message not deleted: %+v", calls)
 	}
 	s := liveID(b)
@@ -812,8 +821,7 @@ func TestTelegramProxy(t *testing.T) {
 	}
 }
 
-// Меню команд выставляется только в личке владельца, и каждая команда из него обрабатывается,
-// а не удаляется как неизвестная
+// Меню видно в личке владельца, после ответа удаляются только команды предпросмотра
 func TestCommandMenu(t *testing.T) {
 	b, tg, _, _ := newTelegramBot(t)
 	b.setCommands(context.Background())
@@ -845,8 +853,10 @@ func TestCommandMenu(t *testing.T) {
 		}
 		message := dm("/" + c.Command)
 		b.onMessage(context.Background(), message)
-		if lastParam(tg.take(), "deleteMessage", "message_id") == fmt.Sprint(message.ID) {
-			t.Errorf("/%s is deleted as unknown", c.Command)
+		calls := tg.take()
+		deleted := lastParam(calls, "deleteMessage", "message_id") == fmt.Sprint(message.ID)
+		if want := c.Command == "status" || c.Command == "submit"; deleted != want {
+			t.Errorf("/%s deleted = %v, want %v", c.Command, deleted, want)
 		}
 	}
 }
@@ -858,10 +868,14 @@ func TestPreviewButtons(t *testing.T) {
 	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8ч", day(10, 19)), false)
 	tg.take()
 
-	b.onMessage(ctx, dm("/status"))
+	status := dm("/status")
+	b.onMessage(ctx, status)
 	calls := tg.take()
 	if countMethod(calls, "sendMessage") != 1 || !strings.Contains(lastParam(calls, "sendMessage", "reply_markup"), viewSubmit) {
 		t.Fatalf("/status has no way to submit: %+v", calls)
+	}
+	if calls[0].method != "sendMessage" || lastParam(calls, "deleteMessage", "message_id") != fmt.Sprint(status.ID) {
+		t.Fatalf("/status was not deleted after the preview was sent: %+v", calls)
 	}
 
 	statusID := b.active.MessageID
@@ -899,6 +913,14 @@ func TestPreviewButtons(t *testing.T) {
 	calls = press(viewNew, fridayID)
 	if countMethod(calls, "editMessageText") != 0 || countMethod(calls, "sendMessage") != 1 {
 		t.Fatalf("status button did not send a new preview: %+v", calls)
+	}
+
+	tg.mu.Lock()
+	tg.sendsFail = true
+	tg.mu.Unlock()
+	b.onMessage(ctx, dm("/submit"))
+	if calls := tg.take(); countMethod(calls, "sendMessage") != 1 || countMethod(calls, "deleteMessage") != 0 {
+		t.Fatalf("the command was not kept after a failed send: %+v", calls)
 	}
 }
 
