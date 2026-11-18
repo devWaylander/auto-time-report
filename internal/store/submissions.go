@@ -24,7 +24,7 @@ type Submission struct {
 	CreatedAt time.Time
 }
 
-// SaveSubmission сохраняет запись о worklog'е; повтор той же пары "задача + дата" - ошибка
+// SaveSubmission сохраняет worklog и снимает отметку отправки периода при новой записи в Jira
 func (s *Store) SaveSubmission(ctx context.Context, sub Submission) (Submission, error) {
 	var (
 		weekPostID sql.NullInt64
@@ -34,17 +34,29 @@ func (s *Store) SaveSubmission(ctx context.Context, sub Submission) (Submission,
 		weekPostID = sql.NullInt64{Int64: sub.WeekPostID, Valid: true}
 	}
 
-	// Нули пишем как NULL: тогда CHECK в схеме не даст сохранить запись бота без ID
-	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO submissions
-		    (user_id, week_post_id, issue_key, work_date, duration_seconds, comment, manual, worklog_id, period_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		RETURNING id, created_at`,
-		sub.UserID, weekPostID, sub.IssueKey, formatDate(sub.WorkDate), int64(sub.Duration/time.Second),
-		sub.Comment, sub.Manual, nullID(sub.WorklogID), nullID(sub.PeriodID),
-	).Scan(&sub.ID, &createdAt)
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		// Нули пишем как NULL: тогда CHECK в схеме не даст сохранить запись бота без ID
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO submissions
+			    (user_id, week_post_id, issue_key, work_date, duration_seconds, comment, manual, worklog_id, period_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			RETURNING id, created_at`,
+			sub.UserID, weekPostID, sub.IssueKey, formatDate(sub.WorkDate), int64(sub.Duration/time.Second),
+			sub.Comment, sub.Manual, nullID(sub.WorklogID), nullID(sub.PeriodID),
+		).Scan(&sub.ID, &createdAt)
+		if err != nil {
+			return fmt.Errorf("insert submission: %w", err)
+		}
+		if sub.PeriodID != 0 {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM period_approvals WHERE user_id = ? AND period_id = ?`,
+				sub.UserID, sub.PeriodID); err != nil {
+				return fmt.Errorf("invalidate period approval: %w", err)
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		return Submission{}, fmt.Errorf("insert submission: %w", err)
+		return Submission{}, err
 	}
 
 	if sub.CreatedAt, err = parseTime(createdAt); err != nil {
@@ -115,7 +127,7 @@ func (s *Store) MarkPeriodRequested(ctx context.Context, userID, periodID int64)
 	return nil
 }
 
-// PeriodRequested сообщает, отправлялся ли период на проверку
+// PeriodRequested сообщает, отправлялся ли период на проверку после последней записи в Jira
 func (s *Store) PeriodRequested(ctx context.Context, userID, periodID int64) (bool, error) {
 	var exists bool
 	err := s.db.QueryRowContext(ctx,

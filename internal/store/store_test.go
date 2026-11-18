@@ -359,6 +359,15 @@ func TestPeriodApprovals(t *testing.T) {
 	if ok, _ := s.PeriodRequested(ctx, u.ID, 123); !ok {
 		t.Fatal("period not requested after marking")
 	}
+	if _, err := s.SaveSubmission(ctx, Submission{
+		UserID: u.ID, IssueKey: "ABC-1", WorkDate: time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC),
+		Duration: 8 * time.Hour, WorklogID: 1, PeriodID: 123,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.PeriodRequested(ctx, u.ID, 123); err != nil || ok {
+		t.Fatalf("new worklog kept the previous approval, requested = %v, err = %v", ok, err)
+	}
 }
 
 func TestClaimNotification(t *testing.T) {

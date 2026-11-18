@@ -144,6 +144,14 @@ func (r *fakeRunner) Run(_ context.Context, passphrase []byte, job corp.Job, hoo
 		}
 		out.Worklogs = append(out.Worklogs, res)
 	}
+	if job.RequestApproval {
+		out.Approved = slices.Clone(job.KnownPeriods)
+		for _, worklog := range out.Worklogs {
+			if worklog.Status == corp.StatusCreated && !slices.Contains(out.Approved, worklog.PeriodID) {
+				out.Approved = append(out.Approved, worklog.PeriodID)
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -1080,5 +1088,108 @@ func TestBotButtonMovesToNewWeek(t *testing.T) {
 	b.onChannelPost(ctx, edit(old, "23.10\nРабота - 7ч", day(10, 26)), true)
 	if calls := tg.take(); countMethod(calls, "editMessageReplyMarkup") != 0 {
 		t.Fatalf("editing the old post moved the button back: %+v", calls)
+	}
+}
+
+func TestWeekArchiveButtonLifecycle(t *testing.T) {
+	b, tg, runner, st := newTelegramBot(t)
+	ctx := context.Background()
+	b.cfg.ChannelID = -1001234567890
+	runner.inJira = map[string]time.Duration{"2026-10-19": 8 * time.Hour}
+	text := "19.10\nРевью кода - 8ч\n20.10\nРабота - 8ч\n21.10\nРабота - 8ч\n22.10\nРабота - 8ч\n23.10\nРабота - 8ч"
+	old := bareChannelPost(text, day(10, 19))
+	old.Chat.ID = b.cfg.ChannelID
+	other := models.InlineKeyboardButton{Text: "Справка", URL: "https://example.com/help"}
+	old.ReplyMarkup = &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{other}}}
+	b.onChannelPost(ctx, old, false)
+	tg.take()
+	post, err := st.WeekPostByMessage(ctx, old.Chat.ID, int64(old.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	submit := func(approval bool) []apiCall {
+		b.onMessage(ctx, dm("/submit"))
+		tg.take()
+		b.pending = &pendingSubmit{
+			postID: post.ID, hash: hashText(text), approve: approval,
+			promptID: 7, expires: b.clock().Add(time.Minute),
+		}
+		b.onMessage(ctx, dm("test-passphrase"))
+		return tg.take()
+	}
+	if calls := submit(false); countMethod(calls, "editMessageReplyMarkup") != 0 ||
+		!strings.Contains(lastParam(calls, "editMessageText", "text"), "можно отправить на проверку") {
+		t.Fatalf("recording worklogs prematurely archived the week: %+v", calls)
+	}
+
+	payload := archiveStartPrefix + strconv.FormatInt(post.ID, 10)
+	archiveLink := testBotURL + "?start=" + payload
+	calls := submit(true)
+	markup := lastParam(calls, "editMessageReplyMarkup", "reply_markup")
+	if lastParam(calls, "editMessageReplyMarkup", "message_id") != fmt.Sprint(old.ID) ||
+		!strings.Contains(markup, archiveButtonText) || !strings.Contains(markup, archiveLink) ||
+		!strings.Contains(markup, other.URL) || strings.Contains(markup, botButtonText) {
+		t.Fatalf("approval did not replace only the bot button: %+v", calls)
+	}
+
+	// Архив открывается даже во время ожидания фразы и не меняет живой предпросмотр
+	active := liveID(b)
+	pending := &pendingSubmit{expires: b.clock().Add(time.Minute)}
+	b.pending = pending
+	b.onMessage(ctx, dm("/start "+payload))
+	calls = tg.take()
+	if result := lastParam(calls, "sendMessage", "text"); !strings.Contains(result, "Неделя 19.10") ||
+		!strings.Contains(result, "Всё записано и отправлено на проверку") || !strings.Contains(result, "вручную") ||
+		strings.Contains(result, "сегодня") || b.pending != pending || liveID(b) != active {
+		t.Fatalf("incorrect archived result or changed bot state: %+v", calls)
+	}
+	if markup := lastParam(calls, "sendMessage", "reply_markup"); !strings.Contains(markup, postURL(old.Chat.ID, int64(old.ID))) ||
+		!strings.Contains(markup, "Скрыть") || strings.Contains(markup, "Обновить") {
+		t.Fatalf("archive has incorrect controls: %s", markup)
+	}
+	b.pending = nil
+
+	changed := edit(old, strings.Replace(text, "23.10\nРабота - 8ч", "23.10\nРабота - 7ч", 1), day(10, 23))
+	changed.ReplyMarkup = &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+		{other}, {{Text: archiveButtonText, URL: archiveLink}},
+	}}
+	b.onChannelPost(ctx, changed, true)
+	calls = tg.take()
+	if markup := lastParam(calls, "editMessageReplyMarkup", "reply_markup"); !strings.Contains(markup, botButtonText) ||
+		!strings.Contains(markup, other.URL) || strings.Contains(markup, archiveLink) {
+		t.Fatalf("mismatch did not restore the working button: %+v", calls)
+	}
+	b.onMessage(ctx, dm("/start "+payload))
+	if calls := tg.take(); lastParam(calls, "sendMessage", "text") != "Итог недели недоступен" {
+		t.Fatalf("the old archive is available after a mismatch: %+v", calls)
+	}
+
+	restored := edit(old, text, day(10, 23).Add(time.Hour))
+	restored.ReplyMarkup = &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+		{other}, {{Text: botButtonText, URL: testBotURL}},
+	}}
+	b.onChannelPost(ctx, restored, true)
+	if calls := tg.take(); !strings.Contains(lastParam(calls, "editMessageReplyMarkup", "reply_markup"), archiveLink) {
+		t.Fatalf("matching worklogs did not restore the archive: %+v", calls)
+	}
+
+	b.clock = func() time.Time { return day(10, 26) }
+	next := bareChannelPost("26.10", day(10, 26))
+	next.Chat.ID = old.Chat.ID
+	b.onChannelPost(ctx, next, false)
+	calls = tg.take()
+	if countMethod(calls, "editMessageReplyMarkup") != 1 ||
+		lastParam(calls, "editMessageReplyMarkup", "message_id") != fmt.Sprint(next.ID) {
+		t.Fatalf("starting the new week changed the archived button: %+v", calls)
+	}
+	b.onChannelPost(ctx, edit(old, "19.10\nРабота", day(10, 26)), true)
+	if calls := tg.take(); len(calls) != 0 {
+		t.Fatalf("the archived post edit triggered Telegram calls: %+v", calls)
+	}
+	b.onMessage(ctx, dm("/start "+payload))
+	if result := lastParam(tg.take(), "sendMessage", "text"); !strings.Contains(result, "Неделя 19.10") ||
+		!strings.Contains(result, "Всё записано и отправлено на проверку") {
+		t.Fatalf("the archived week was lost after rollover: %q", result)
 	}
 }

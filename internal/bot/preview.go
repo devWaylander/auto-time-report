@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +40,8 @@ type weekState struct {
 	submitted map[string]store.Submission
 	// Периоды с записанными worklog'ами, ещё не отправленные на проверку
 	unapproved []int64
+	// Недели с подтверждённой отправкой периода на проверку
+	requestedWeeks map[string]bool
 }
 
 func submissionKey(issue string, date time.Time) string {
@@ -102,19 +103,27 @@ func (b *Bot) loadWeekOf(ctx context.Context, post store.WeekPost) (weekState, e
 	if err != nil {
 		return weekState{}, err
 	}
-	w := weekState{post: post, report: report, submitted: map[string]store.Submission{}}
+	w := weekState{post: post, report: report, submitted: map[string]store.Submission{}, requestedWeeks: map[string]bool{}}
+	checkedPeriods := map[int64]bool{}
 	for _, s := range subs {
 		w.submitted[submissionKey(s.IssueKey, s.WorkDate)] = s
 		// У найденных в Jira записей периода нет: на проверку их отправляют вместе с остальными днями
-		if s.Manual || slices.Contains(w.unapproved, s.PeriodID) {
+		if s.Manual {
 			continue
 		}
-		requested, err := b.store.PeriodRequested(ctx, b.userID, s.PeriodID)
-		if err != nil {
-			return weekState{}, err
+		requested, checked := checkedPeriods[s.PeriodID]
+		if !checked {
+			requested, err = b.store.PeriodRequested(ctx, b.userID, s.PeriodID)
+			if err != nil {
+				return weekState{}, err
+			}
+			checkedPeriods[s.PeriodID] = requested
+			if !requested {
+				w.unapproved = append(w.unapproved, s.PeriodID)
+			}
 		}
-		if !requested {
-			w.unapproved = append(w.unapproved, s.PeriodID)
+		if requested {
+			w.requestedWeeks[calendar.WeekStart(s.WorkDate).Format(time.DateOnly)] = true
 		}
 	}
 	return w, nil
@@ -137,10 +146,12 @@ func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.Rep
 
 // weekView - сообщение о посте: превью с предупреждениями под ним или ошибки разбора
 type weekView struct {
-	text     string
-	markup   models.ReplyMarkup
-	problems string // ошибки разбора или предупреждения; пусто - с постом всё в порядке
-	live     bool   // сообщение про конкретный пост: его можно держать живым
+	text         string
+	markup       models.ReplyMarkup
+	problems     string // ошибки разбора или предупреждения; пусто - с постом всё в порядке
+	live         bool   // сообщение про конкретный пост: его можно держать живым
+	archiveText  string // итог недели без отметки "сегодня"
+	archiveKnown bool   // расчёт достоверен, пустой итог означает незавершённую неделю
 }
 
 // viewOf собирает сообщение по результату loadWeek; header - строка над ним
@@ -158,10 +169,10 @@ func (b *Bot) viewOf(ctx context.Context, w weekState, err error, submit bool, h
 		keys.ChannelURL = b.weekChannelURL(ctx)
 		return weekView{text: noWeekPostText, markup: previewKeyboard(keys)}
 	case errors.Is(err, parser.ErrNoEntries):
-		return weekView{text: withHeader(emptyWeekPostText), markup: previewKeyboard(keys), live: true}
+		return weekView{text: withHeader(emptyWeekPostText), markup: previewKeyboard(keys), live: true, archiveKnown: true}
 	case err != nil && w.post.ID != 0:
 		problems := "⚠️ В посте недели ошибки:\n" + formatParseErrors(err)
-		return weekView{text: withHeader(problems), markup: previewKeyboard(keys), problems: problems, live: true}
+		return weekView{text: withHeader(problems), markup: previewKeyboard(keys), problems: problems, live: true, archiveKnown: true}
 	case err != nil:
 		slog.Error("load week", "error", err)
 		return weekView{text: "⚠️ Предпросмотр не собран, подробности в логах бота", markup: previewKeyboard(keys)}
@@ -176,7 +187,15 @@ func (b *Bot) viewOf(ctx context.Context, w weekState, err error, submit bool, h
 	if problems != "" {
 		text += "\n\n" + problems
 	}
-	return weekView{text: withHeader(text), markup: previewKeyboard(keys), problems: problems, live: true}
+	view := weekView{
+		text: withHeader(text), markup: previewKeyboard(keys), problems: problems, live: true,
+		archiveKnown: !in.CalendarDown || in.Mismatch || in.Pending > 0,
+	}
+	if in.complete() {
+		in.Today = time.Time{}
+		view.archiveText = renderPreview(in)
+	}
+	return view
 }
 
 // warnings - предупреждения по разобранному посту: даты без записей и правки дней, уже записанных в Jira
@@ -223,9 +242,15 @@ type previewInput struct {
 	Unfilled     bool // есть рабочие дни без записей, в том числе будущие: на проверку рано
 	Pending      int
 	Unapproved   int
+	Requested    bool // есть подтверждение отправки для каждой недели в посте
+	Mismatch     bool
 	CalendarDown bool
 	Today        time.Time
 	Submit       bool // превью с кнопками отправки
+}
+
+func (in previewInput) complete() bool {
+	return in.Pending == 0 && !in.Unfilled && !in.Mismatch && !in.CalendarDown && in.Requested
 }
 
 func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
@@ -233,7 +258,16 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 	from, to := calendar.WeekStart(dates[0]), calendar.WeekStart(dates[len(dates)-1]).AddDate(0, 0, 6)
 	today := b.today()
 
-	in := previewInput{Today: today}
+	in := previewInput{
+		Today: today, Unapproved: len(w.unapproved),
+		Requested: len(w.unapproved) == 0 && w.requestedWeeks[b.postWeek(w.post)],
+	}
+	for _, date := range dates {
+		if !w.requestedWeeks[calendar.WeekStart(date).Format(time.DateOnly)] {
+			in.Requested = false
+			break
+		}
+	}
 	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
 		kind, err := b.cal.Day(ctx, d)
 		if err != nil {
@@ -266,6 +300,7 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 				line.Mismatch = true
 			}
 		}
+		in.Mismatch = in.Mismatch || line.Mismatch
 
 		in.Norm += kind.Norm()
 		in.Total += line.Total
@@ -280,7 +315,6 @@ func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 		}
 	}
 	in.Pending = len(w.pendingWorklogs())
-	in.Unapproved = len(w.unapproved)
 	return in
 }
 
@@ -395,12 +429,16 @@ func renderPreview(in previewInput) string {
 	switch {
 	case in.Pending > 0:
 		fmt.Fprintf(&b, "\nК записи в Jira: %d", in.Pending)
+	case in.Mismatch:
+		b.WriteString("\n⚠️ Есть расхождения с Jira")
+	case in.complete():
+		b.WriteString("\n✅ Всё записано и отправлено на проверку")
 	case in.Unfilled:
 		b.WriteString("\n✅ В Jira есть всё из поста")
 	case in.Unapproved > 0:
 		b.WriteString("\nНеделя заполнена, можно отправить на проверку")
 	default:
-		b.WriteString("\n✅ Всё записано и отправлено на проверку")
+		b.WriteString("\n✅ В Jira есть всё из поста")
 	}
 	if in.Submit && in.Unfilled && (in.Pending > 0 || in.Unapproved > 0) {
 		b.WriteString("\nНа проверку после заполнения всех рабочих дней")

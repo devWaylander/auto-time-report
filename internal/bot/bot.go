@@ -4,7 +4,6 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -295,36 +294,35 @@ func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited boo
 	}
 
 	known, err := b.store.WeekPostByMessage(ctx, post.ChatID, post.MessageID)
+	var saved store.WeekPost
+	var updated bool
 	switch {
 	case err == nil:
-		if !b.isCurrentWeek(known) || !b.updateKnownPost(ctx, post) {
+		if !b.isCurrentWeek(known) {
 			return
 		}
+		saved, updated = b.updateKnownPost(ctx, post)
 	case errors.Is(err, store.ErrNotFound):
-		if !parser.LooksLikePost(post.Text) || !b.considerNewPost(ctx, post) {
+		if !parser.LooksLikePost(post.Text) {
 			return
 		}
+		saved, updated = b.considerNewPost(ctx, post)
 	default:
 		slog.Error("find week post", "error", err)
-		return
 	}
-	b.syncBotButton(ctx, msg)
+	if updated && b.isCurrentWeek(saved) {
+		b.onPostChanged(ctx, saved, msg)
+	}
 }
 
-// updateKnownPost сохраняет правку поста недели и обновляет его живое сообщение
-func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) bool {
+// updateKnownPost сохраняет правку поста текущей недели
+func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) (store.WeekPost, bool) {
 	saved, updated, err := b.store.SaveWeekPost(ctx, post)
 	if err != nil {
 		slog.Error("save week post", "error", err)
 		b.notify(ctx, "⚠️ Правка поста недели не сохранена, подробности в логах бота")
-		return false
 	}
-	if !updated {
-		// Пришла версия старше сохранённой
-		return false
-	}
-	b.onPostChanged(ctx, saved)
-	return true
+	return saved, updated
 }
 
 // showPreview показывает текущую неделю, новый предпросмотр заменяет прежний
@@ -338,6 +336,7 @@ func (b *Bot) showPreviewLocked(ctx context.Context, submit bool, messageID int,
 	week := calendar.WeekStart(b.now())
 	w, err := b.loadWeek(ctx)
 	v := b.viewOf(ctx, w, err, submit, header)
+	b.syncWeekArchive(ctx, w.post, v, nil)
 	if v.live || errors.Is(err, errNoPost) {
 		return b.showActive(ctx, v, store.ActiveWeekView{
 			MessageID: messageID, PostID: w.post.ID, WeekStart: week,
@@ -395,7 +394,7 @@ func (b *Bot) clearActive(ctx context.Context) {
 }
 
 // onPostChanged обновляет текущий предпросмотр и сообщает о новых проблемах, вызывать под postMu
-func (b *Bot) onPostChanged(ctx context.Context, post store.WeekPost) {
+func (b *Bot) onPostChanged(ctx context.Context, post store.WeekPost, msg *models.Message) {
 	w, err := b.loadWeekOf(ctx, post)
 	next := store.ActiveWeekView{PostID: post.ID, WeekStart: calendar.WeekStart(b.now())}
 	active := b.active
@@ -404,6 +403,7 @@ func (b *Bot) onPostChanged(ctx context.Context, post store.WeekPost) {
 		next.Submit, next.Header = active.Submit, active.Header
 	}
 	v := b.viewOf(ctx, w, err, next.Submit, next.Header)
+	b.syncWeekArchive(ctx, post, v, msg)
 	if !v.live || active.MessageID == 0 && v.problems == "" {
 		return
 	}
@@ -422,15 +422,17 @@ func (b *Bot) onPostChanged(ctx context.Context, post store.WeekPost) {
 func (b *Bot) refreshLive(ctx context.Context, post store.WeekPost) {
 	b.postMu.Lock()
 	defer b.postMu.Unlock()
-	if b.active.PostID != post.ID || !b.isCurrentWeek(post) {
-		return
-	}
 	current, err := b.store.WeekPostByMessage(ctx, post.ChatID, post.MessageID)
 	if err != nil {
 		slog.Warn("read post after submit", "error", err)
 		return
 	}
-	b.onPostChanged(ctx, current)
+	if b.active.PostID == post.ID && b.isCurrentWeek(current) {
+		b.onPostChanged(ctx, current, nil)
+		return
+	}
+	w, err := b.loadWeekOf(ctx, current)
+	b.syncWeekArchive(ctx, current, b.viewOf(ctx, w, err, false, ""), nil)
 }
 
 func (b *Bot) forgetLive(ctx context.Context, messageID int) {
@@ -469,42 +471,41 @@ func emptyDatesWarning(report parser.Report) string {
 }
 
 // considerNewPost принимает новое сообщение как пост недели, если оно подходит; true - принято
-func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) bool {
+func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) (store.WeekPost, bool) {
 	now := b.now()
 	date := parser.FirstPostDate(post.Text, now)
 	if date.IsZero() {
-		return false
+		return store.WeekPost{}, false
 	}
 	week := calendar.WeekStart(now)
 	post.WeekStart = calendar.WeekStart(date)
 	if !post.WeekStart.Equal(week) {
-		return false
+		return store.WeekPost{}, false
 	}
 	current, err := b.store.LatestWeekPost(ctx, b.userID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 	case err != nil:
 		slog.Error("load week post", "error", err)
-		return false
+		return store.WeekPost{}, false
 	default:
 		if b.postWeek(post) <= b.postWeek(current) {
-			return false
+			return store.WeekPost{}, false
 		}
 	}
 	if _, err := b.store.WeekPostForWeek(ctx, b.userID, post.WeekStart); !errors.Is(err, store.ErrNotFound) {
 		if err != nil {
 			slog.Error("find post for week", "error", err)
 		}
-		return false
+		return store.WeekPost{}, false
 	}
 	saved, _, err := b.store.SaveWeekPost(ctx, post)
 	if err != nil {
 		slog.Error("save week post", "error", err)
 		b.notify(ctx, "⚠️ Пост недели не сохранён, подробности в логах бота")
-		return false
+		return store.WeekPost{}, false
 	}
-	b.onPostChanged(ctx, saved)
-	return true
+	return saved, true
 }
 
 // botLink - ссылка на чат с ботом. Имя бота спрашивается у Telegram один раз
@@ -527,117 +528,6 @@ func (b *Bot) botLink(ctx context.Context) (string, error) {
 	b.botURL = link
 	b.mu.Unlock()
 	return link, nil
-}
-
-const botButtonText = "🤖 В бота"
-
-// syncBotButton сначала ставит кнопку под текущим постом, затем восстанавливает клавиатуру старого
-func (b *Bot) syncBotButton(ctx context.Context, msg *models.Message) {
-	b.mu.Lock()
-	off := b.buttonOff
-	b.mu.Unlock()
-	if off {
-		return
-	}
-	current, err := b.currentWeekPost(ctx)
-	if errors.Is(err, store.ErrNotFound) {
-		return
-	}
-	if err != nil {
-		slog.Warn("load week for channel button", "error", err)
-		return
-	}
-	isCurrent := current.ChatID == msg.Chat.ID && current.MessageID == int64(msg.ID)
-	if !isCurrent {
-		return
-	}
-	link, err := b.botLink(ctx)
-	if err != nil {
-		slog.Warn("bot link for post button", "error", err)
-		return
-	}
-	base, attached := stripBotButton(msg.ReplyMarkup, link)
-	buttons, err := b.store.ChannelBotButtons(ctx, b.userID)
-	if err != nil {
-		slog.Warn("load channel buttons", "error", err)
-		return
-	}
-	if !attached {
-		markup := base
-		markup.InlineKeyboard = append(markup.InlineKeyboard, []models.InlineKeyboardButton{{Text: botButtonText, URL: link}})
-		if err := b.editChannelMarkup(ctx, msg.Chat.ID, int64(msg.ID), markup); err != nil {
-			slog.Warn("attach bot button to week post", "error", err)
-			b.mu.Lock()
-			b.buttonOff = true
-			b.mu.Unlock()
-			return
-		}
-	}
-	encoded, err := json.Marshal(base)
-	if err != nil {
-		slog.Warn("encode channel keyboard", "error", err)
-		return
-	}
-	original := string(encoded)
-	if err := b.store.SetChannelBotButton(ctx, current.ID, &original); err != nil {
-		slog.Warn("remember channel button", "error", err)
-		return
-	}
-	for _, button := range buttons {
-		if button.PostID == current.ID {
-			continue
-		}
-		var markup models.InlineKeyboardMarkup
-		if err := json.Unmarshal([]byte(button.Base), &markup); err != nil {
-			slog.Warn("decode channel keyboard", "error", err)
-			continue
-		}
-		b.removeChannelBotButton(ctx, button.PostID, button.ChatID, button.MessageID, markup)
-	}
-}
-
-// stripBotButton сохраняет соседние кнопки и порядок строк
-func stripBotButton(markup *models.InlineKeyboardMarkup, link string) (models.InlineKeyboardMarkup, bool) {
-	base := models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
-	if markup == nil {
-		return base, false
-	}
-	attached := false
-	for _, row := range markup.InlineKeyboard {
-		var buttons []models.InlineKeyboardButton
-		for _, button := range row {
-			if button.Text == botButtonText && button.URL == link {
-				attached = true
-				continue
-			}
-			buttons = append(buttons, button)
-		}
-		if len(buttons) > 0 {
-			base.InlineKeyboard = append(base.InlineKeyboard, buttons)
-		}
-	}
-	return base, attached
-}
-
-func (b *Bot) removeChannelBotButton(ctx context.Context, postID, chatID, messageID int64, base models.InlineKeyboardMarkup) {
-	err := b.editChannelMarkup(ctx, chatID, messageID, base)
-	if err != nil && !strings.Contains(err.Error(), "message to edit not found") {
-		slog.Warn("remove bot button from old post", "error", err)
-		return
-	}
-	if err := b.store.SetChannelBotButton(ctx, postID, nil); err != nil {
-		slog.Warn("forget old channel button", "error", err)
-	}
-}
-
-func (b *Bot) editChannelMarkup(ctx context.Context, chatID, messageID int64, markup models.InlineKeyboardMarkup) error {
-	_, err := b.api.EditMessageReplyMarkup(ctx, &tgbot.EditMessageReplyMarkupParams{
-		ChatID: chatID, MessageID: int(messageID), ReplyMarkup: markup,
-	})
-	if err != nil && !strings.Contains(err.Error(), "message is not modified") {
-		return errors.New(b.redact(err.Error()))
-	}
-	return nil
 }
 
 // changedSubmitted предупреждает о правках в днях, которые уже записаны в Jira: бот их не перезаписывает
@@ -682,11 +572,17 @@ func (b *Bot) onMessage(ctx context.Context, msg *models.Message) {
 	if !b.fromOwner(msg) {
 		return
 	}
+	text := strings.TrimSpace(msg.Text)
+	cmd, args, _ := strings.Cut(text, " ")
+	cmd, _, _ = strings.Cut(cmd, "@")
+	args = strings.TrimSpace(args)
+	if id, archive := strings.CutPrefix(args, archiveStartPrefix); cmd == "/start" && archive {
+		b.sendWeekArchive(ctx, msg, id)
+		return
+	}
 	if b.takePassphrase(ctx, msg) {
 		return
 	}
-
-	text := strings.TrimSpace(msg.Text)
 	if !strings.HasPrefix(text, "/") {
 		// Обычный текст боту не нужен. Если это опоздавшая пароль-фраза, ей нельзя висеть в чате
 		if err := b.deleteMessage(ctx, msg.Chat.ID, msg.ID); err != nil {
@@ -697,9 +593,6 @@ func (b *Bot) onMessage(ctx context.Context, msg *models.Message) {
 		return
 	}
 
-	cmd, args, _ := strings.Cut(text, " ")
-	cmd, _, _ = strings.Cut(cmd, "@")
-	args = strings.TrimSpace(args)
 	switch cmd {
 	case "/start", "/help":
 		b.notify(ctx, helpText)
