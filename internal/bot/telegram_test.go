@@ -360,27 +360,21 @@ func TestLiveMessage(t *testing.T) {
 	}
 }
 
-// Живое сообщение поста прошлой недели после исправления показывает статус той недели, без кнопок отправки
-func TestOldWeekLiveMessage(t *testing.T) {
+func TestOldWeekEditsAreIgnored(t *testing.T) {
 	b, tg, _, _ := newTelegramBot(t)
-	b.clock = func() time.Time { return time.Date(2026, 10, 28, 12, 0, 0, 0, tz) }
 	ctx := context.Background()
 	old := channelPost("19.10\nРабота - 8ч", day(10, 19))
 	b.onChannelPost(ctx, old, false)
+	b.clock = func() time.Time { return day(10, 28) }
 	b.onChannelPost(ctx, channelPost("26.10\nРабота - 8ч", day(10, 26)), false)
+	tg.take()
 	b.onChannelPost(ctx, edit(old, "19.10\nРабота", day(10, 27)), true)
-	calls := tg.take()
-	if len(tg.sent(calls)) != 1 {
-		t.Fatalf("no message for last week's post: %+v", calls)
+	if calls := tg.take(); len(calls) != 0 {
+		t.Fatalf("the old edit triggered Telegram calls: %+v", calls)
 	}
-	var id int
-	for _, l := range b.live {
-		id = l.messageID
-	}
-	b.onChannelPost(ctx, edit(old, "19.10\nРабота - 7ч", day(10, 28)), true)
-	if calls := tg.take(); !inPlace(calls, fmt.Sprint(id), "Неделя 19.10") ||
-		strings.Contains(lastParam(calls, "editMessageText", "reply_markup"), submitPrefix) {
-		t.Fatalf("last week's message: %+v", calls)
+	post, err := b.store.WeekPostByMessage(ctx, old.Chat.ID, int64(old.ID))
+	if err != nil || post.Text != old.Text {
+		t.Fatalf("the old edit changed stored text: %+v, %v", post, err)
 	}
 }
 
@@ -412,14 +406,13 @@ func TestNewPostWithEmptyDateNotice(t *testing.T) {
 
 func TestNextWeekPostAndLateFix(t *testing.T) {
 	b, tg, _, _ := newTelegramBot(t)
-	b.clock = func() time.Time { return time.Date(2026, 10, 28, 12, 0, 0, 0, tz) }
 	ctx := context.Background()
 
 	old := channelPost("19.10\nРабота - 8ч", day(10, 19))
 	b.onChannelPost(ctx, old, false)
+	b.clock = func() time.Time { return day(10, 28) }
 	// Правка прошлой недели с новой датой не переводит старый пост в текущую неделю
-	old = edit(old, "19.10\nРабота - 8ч\n\n26.10\nСозвон - 1ч", day(10, 26))
-	b.onChannelPost(ctx, old, true)
+	b.onChannelPost(ctx, edit(old, "19.10\nРабота - 8ч\n\n26.10\nСозвон - 1ч", day(10, 26)), true)
 
 	// Новый пост определяется по дате, ошибку во времени бот показывает в личке
 	tg.take()
@@ -443,14 +436,14 @@ func TestNextWeekPostAndLateFix(t *testing.T) {
 		t.Fatalf("fix did not update the same preview: %+v", calls)
 	}
 
-	// Правка поста прошлой недели сохраняется, но постом недели остаётся новый
+	// Правка старого поста не меняет ни текущую неделю, ни сохранённый текст
 	b.onChannelPost(ctx, edit(old, "19.10\nРабота - 7ч", day(10, 28)), true)
 	if latestText(t, b) != fixed.Text {
 		t.Fatal("edit of last week's post became the week post")
 	}
 	stored, err := b.store.WeekPostByMessage(ctx, -100, int64(old.ID))
-	if err != nil || stored.Text != "19.10\nРабота - 7ч" {
-		t.Fatalf("last week's post edit not saved: %+v %v", stored, err)
+	if err != nil || stored.Text != old.Text {
+		t.Fatalf("last week's post was changed: %+v %v", stored, err)
 	}
 	tg.take()
 }

@@ -65,9 +65,8 @@ type Bot struct {
 
 	// Апдейты канала обрабатываются по одному
 	postMu sync.Mutex
-	// Текущий предпросмотр и предупреждения о старых постах, под postMu
+	// Текущий предпросмотр, под postMu
 	active store.ActiveWeekView
-	live   map[int64]liveMessage
 	// Идущая отправка: при остановке её нужно дождаться, чтобы туннель погас
 	inflight sync.WaitGroup
 
@@ -275,9 +274,7 @@ func (b *Bot) answer(ctx context.Context, cq *models.CallbackQuery, text string,
 	}
 }
 
-// onChannelPost следит за постом недели. Правки уже известного поста принимаются всегда, даже если первая
-// строка перестала быть датой или ключом: об этом скажет уведомление. Новый пост с датой текущей недели
-// принимается даже с пустыми днями или ошибками. Обычные заметки в базу не попадают
+// onChannelPost следит за постом текущей недели и принимает новый пост с её датой даже с ошибками
 func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited bool) {
 	if msg.Chat.ID != b.cfg.ChannelID || msg.Text == "" {
 		return
@@ -297,10 +294,10 @@ func (b *Bot) onChannelPost(ctx context.Context, msg *models.Message, edited boo
 		post.EditedAt = time.Unix(int64(msg.EditDate), 0)
 	}
 
-	_, err := b.store.WeekPostByMessage(ctx, post.ChatID, post.MessageID)
+	known, err := b.store.WeekPostByMessage(ctx, post.ChatID, post.MessageID)
 	switch {
 	case err == nil:
-		if !b.updateKnownPost(ctx, post) {
+		if !b.isCurrentWeek(known) || !b.updateKnownPost(ctx, post) {
 			return
 		}
 	case errors.Is(err, store.ErrNotFound):
@@ -328,12 +325,6 @@ func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) bool {
 	}
 	b.onPostChanged(ctx, saved)
 	return true
-}
-
-// liveMessage - последнее предупреждение о старом посте
-type liveMessage struct {
-	messageID int
-	problems  string
 }
 
 // showPreview показывает текущую неделю, новый предпросмотр заменяет прежний
@@ -406,15 +397,6 @@ func (b *Bot) clearActive(ctx context.Context) {
 // onPostChanged обновляет текущий предпросмотр и сообщает о новых проблемах, вызывать под postMu
 func (b *Bot) onPostChanged(ctx context.Context, post store.WeekPost) {
 	w, err := b.loadWeekOf(ctx, post)
-	if !b.isCurrentWeek(post) {
-		v := b.viewOf(ctx, w, err, false, "")
-		buttons := append(postButton(postURL(post.ChatID, post.MessageID)),
-			models.InlineKeyboardButton{Text: "✖️ Скрыть", CallbackData: hideData})
-		v.markup = models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{buttons}}
-		b.onOldPostChanged(ctx, post.ID, v)
-		return
-	}
-
 	next := store.ActiveWeekView{PostID: post.ID, WeekStart: calendar.WeekStart(b.now())}
 	active := b.active
 	sameWeek := active.WeekStart.Format(time.DateOnly) == next.WeekStart.Format(time.DateOnly)
@@ -433,37 +415,6 @@ func (b *Bot) onPostChanged(ctx context.Context, post store.WeekPost) {
 	}
 	if err := b.showActive(ctx, v, next); err != nil {
 		slog.Warn("update active preview", "error", err)
-	}
-}
-
-func (b *Bot) onOldPostChanged(ctx context.Context, postID int64, v weekView) {
-	if !v.live {
-		return
-	}
-	old, tracked := b.live[postID]
-	switch {
-	case v.problems != "" && v.problems != old.problems:
-		msg, err := b.send(ctx, v.text, v.markup)
-		if err != nil {
-			slog.Error("send post message", "error", err)
-			return
-		}
-		if tracked {
-			if err := b.deleteMessage(ctx, b.cfg.OwnerID, old.messageID); err != nil {
-				slog.Warn("delete post message", "error", err)
-			}
-		}
-		if b.live == nil {
-			b.live = map[int64]liveMessage{}
-		}
-		b.live[postID] = liveMessage{messageID: msg.ID, problems: v.problems}
-	case tracked:
-		if err := b.editMessage(ctx, old.messageID, v.text, v.markup); err != nil {
-			slog.Warn("update post message", "error", err)
-			delete(b.live, postID)
-			return
-		}
-		b.live[postID] = liveMessage{messageID: old.messageID, problems: v.problems}
 	}
 }
 
@@ -487,11 +438,6 @@ func (b *Bot) forgetLive(ctx context.Context, messageID int) {
 	defer b.postMu.Unlock()
 	if b.active.MessageID == messageID {
 		b.clearActive(ctx)
-	}
-	for id, l := range b.live {
-		if l.messageID == messageID {
-			delete(b.live, id)
-		}
 	}
 }
 
@@ -531,14 +477,8 @@ func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) bool {
 	}
 	week := calendar.WeekStart(now)
 	post.WeekStart = calendar.WeekStart(date)
-	if post.WeekStart.After(week) {
+	if !post.WeekStart.Equal(week) {
 		return false
-	}
-	if post.WeekStart.Before(week) {
-		// За прошлые недели по-прежнему принимаем только готовые посты
-		if _, err := parser.Parse(post.Text, b.cfg.DefaultIssue, now); err != nil {
-			return false
-		}
 	}
 	current, err := b.store.LatestWeekPost(ctx, b.userID)
 	switch {
@@ -608,7 +548,7 @@ func (b *Bot) syncBotButton(ctx context.Context, msg *models.Message) {
 		return
 	}
 	isCurrent := current.ChatID == msg.Chat.ID && current.MessageID == int64(msg.ID)
-	if !isCurrent && msg.ReplyMarkup == nil {
+	if !isCurrent {
 		return
 	}
 	link, err := b.botLink(ctx)
@@ -617,13 +557,6 @@ func (b *Bot) syncBotButton(ctx context.Context, msg *models.Message) {
 		return
 	}
 	base, attached := stripBotButton(msg.ReplyMarkup, link)
-	if !isCurrent {
-		if attached {
-			b.removeBotButtonFromEditedPost(ctx, msg, base, current.ID)
-		}
-		return
-	}
-
 	buttons, err := b.store.ChannelBotButtons(ctx, b.userID)
 	if err != nil {
 		slog.Warn("load channel buttons", "error", err)
@@ -684,24 +617,6 @@ func stripBotButton(markup *models.InlineKeyboardMarkup, link string) (models.In
 		}
 	}
 	return base, attached
-}
-
-// removeBotButtonFromEditedPost снимает прежнюю кнопку, если она видна в правке и новая уже установлена
-func (b *Bot) removeBotButtonFromEditedPost(ctx context.Context, msg *models.Message, base models.InlineKeyboardMarkup, currentID int64) {
-	buttons, err := b.store.ChannelBotButtons(ctx, b.userID)
-	if err != nil {
-		slog.Warn("load channel buttons", "error", err)
-		return
-	}
-	for _, button := range buttons {
-		if button.PostID == currentID {
-			post, err := b.store.WeekPostByMessage(ctx, msg.Chat.ID, int64(msg.ID))
-			if err == nil {
-				b.removeChannelBotButton(ctx, post.ID, post.ChatID, post.MessageID, base)
-			}
-			return
-		}
-	}
 }
 
 func (b *Bot) removeChannelBotButton(ctx context.Context, postID, chatID, messageID int64, base models.InlineKeyboardMarkup) {
