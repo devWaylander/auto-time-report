@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-telegram/bot/models"
 
@@ -292,8 +293,21 @@ func renderPreview(in previewInput) string {
 	first, last := in.Days[0].Date, in.Days[len(in.Days)-1].Date
 	fmt.Fprintf(&b, "<b>Неделя %s-%s</b>\n\n", first.Format("02.01"), last.Format("02.01.2006"))
 
-	for _, d := range in.Days {
-		// Значок в начале каждой строки: эмодзи выше текста, и строки без него выходили бы ниже остальных
+	totals := make([]string, len(in.Days))
+	width := 0
+	for i, d := range in.Days {
+		if d.Total > 0 {
+			totals[i] = parser.FormatDuration(d.Total)
+		}
+		if d.shortfall() > 0 {
+			totals[i] += " из " + parser.FormatDuration(d.Kind.Norm())
+		}
+		width = max(width, utf8.RuneCountInString(totals[i]))
+	}
+
+	b.WriteString("<pre>")
+	for i, d := range in.Days {
+		// Значок после даты и часов: ширина эмодзи не сдвигает колонки
 		mark := "▫️"
 		switch {
 		case d.Mismatch:
@@ -308,37 +322,33 @@ func renderPreview(in previewInput) string {
 		case d.Worklogs > 0:
 			mark = "🔹"
 		}
-		tail := ""
-		note := ""
+		var notes []string
 		switch {
 		case d.Kind == calendar.Off && d.Total > 0:
-			note = " <i>(выходной)</i>"
+			notes = append(notes, "выходной")
 		case d.Kind == calendar.Short:
-			note = " <i>(сокращённый)</i>"
-		}
-		// У пустого дня времени нет совсем: "0ч" читался бы как сознательно записанный ноль, а пустоту
-		// и так показывает значок
-		total := ""
-		if d.Total > 0 {
-			total = " - " + parser.FormatDuration(d.Total)
-		}
-		if d.shortfall() > 0 {
-			total += " из " + parser.FormatDuration(d.Kind.Norm())
+			notes = append(notes, "сокращённый")
 		}
 		if d.Manual > 0 {
-			tail += " вручную"
+			notes = append(notes, "вручную")
 		}
 		if d.Mismatch {
-			tail += " · в Jira " + parser.FormatDuration(d.InJira)
+			notes = append(notes, "в Jira "+parser.FormatDuration(d.InJira))
 		}
 		if d.Date.Equal(in.Today) {
-			tail += " · сегодня"
+			notes = append(notes, "сегодня")
 		}
-		fmt.Fprintf(&b, "%s %s %s%s%s%s\n", mark, weekdays[d.Date.Weekday()], d.Date.Format("02.01"), total, note, tail)
+		fmt.Fprintf(&b, "%s %s  %-*s  %s", weekdays[d.Date.Weekday()], d.Date.Format("02.01"), width, totals[i], mark)
+		if len(notes) > 0 {
+			b.WriteByte(' ')
+			b.WriteString(strings.Join(notes, " · "))
+		}
+		b.WriteByte('\n')
 		if len(d.Issues) > 0 {
-			fmt.Fprintf(&b, "    <i>%s</i>\n", html.EscapeString(strings.Join(d.Issues, ", ")))
+			fmt.Fprintf(&b, "    %s\n", html.EscapeString(strings.Join(d.Issues, ", ")))
 		}
 	}
+	b.WriteString("</pre>\n")
 
 	fmt.Fprintf(&b, "\n<b>Итого: %s</b> из %s по норме", parser.FormatDuration(in.Total), parser.FormatDuration(in.Norm))
 	switch {

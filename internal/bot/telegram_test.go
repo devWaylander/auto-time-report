@@ -233,16 +233,6 @@ func TestChannelNotesDoNotReplaceWeekPost(t *testing.T) {
 	}
 }
 
-// saved - последний сохранённый пост
-func saved(t *testing.T, b *Bot) store.WeekPost {
-	t.Helper()
-	p, err := b.store.LatestWeekPost(context.Background(), b.userID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
 // liveID - активное сообщение, пусто если его нет
 func liveID(b *Bot) string {
 	if b.active.MessageID == 0 {
@@ -817,7 +807,7 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 
 	b.onMessage(ctx, dm("/status"))
 	preview := strings.Join(tg.sent(tg.take()), "\n")
-	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "⚠️ Пн 19.10 - 8ч вручную · в Jira 6ч") {
+	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "Пн 19.10  8ч  ⚠️ вручную · в Jira 6ч") {
 		t.Fatalf("manual day is not counted as written or its mismatch is hidden:\n%s", preview)
 	}
 
@@ -852,7 +842,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	b.onMessage(ctx, dm("Str0ng-Passphrase-XYZ"))
 	calls := tg.take()
 	// После отправки живой предпросмотр показывает свежее состояние на месте
-	if lastParam(calls, "editMessageText", "message_id") != live || !strings.Contains(lastParam(calls, "editMessageText", "text"), "☑️ Вт 20.10 - 8ч") {
+	if lastParam(calls, "editMessageText", "message_id") != live || !strings.Contains(lastParam(calls, "editMessageText", "text"), "Вт 20.10  8ч  ☑️") {
 		t.Fatalf("live preview not refreshed after submit: %+v", calls)
 	}
 	if len(runner.jobs) != 1 {
@@ -864,7 +854,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	}
 
 	b.onMessage(ctx, dm("/status"))
-	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "☑️ Вт 20.10 - 8ч") || strings.Contains(preview, "К записи") {
+	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "Вт 20.10  8ч  ☑️") || strings.Contains(preview, "К записи") {
 		t.Fatalf("day is not fully written after submit:\n%s", preview)
 	}
 }

@@ -125,7 +125,7 @@ func (s *Store) ChannelBotButtons(ctx context.Context, userID int64) ([]ChannelB
 	if err != nil {
 		return nil, fmt.Errorf("list channel bot buttons: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var buttons []ChannelBotButton
 	for rows.Next() {
 		var button ChannelBotButton
