@@ -196,7 +196,6 @@ func TestParseDurationErrors(t *testing.T) {
 		"Работа без времени",
 		"8ч",
 		"- 8ч",
-		"Работа -8ч",
 		"Работа - 8 часов",
 		"Работа - 8 ч",
 		"Работа - 1,5ч",
@@ -213,6 +212,21 @@ func TestParseDurationErrors(t *testing.T) {
 				t.Fatalf("expected error, got %v", d)
 			}
 		})
+	}
+}
+
+func TestParseDurationSeparator(t *testing.T) {
+	for _, line := range []string{
+		"XYZ-101: Обновление сборки - проверка CI- 8ч",
+		"Работа -8ч",
+		"Работа-8ч",
+	} {
+		if _, err := parseDuration(line); err != errDurationSeparator {
+			t.Errorf("parseDuration(%q) = %v, want %v", line, err, errDurationSeparator)
+		}
+	}
+	if _, err := parseDuration("Работа - -8ч"); err != errDurationFormat {
+		t.Errorf("negative duration = %v, want %v", err, errDurationFormat)
 	}
 }
 
@@ -384,9 +398,9 @@ func TestLineErrorMessage(t *testing.T) {
 		t.Fatal("expected errors")
 	}
 	want := []string{
-		`11.11, "ахахах": не найдено время, ожидается формат: "XXч XXм", "XXч", "XXм"`,
-		`11.11, "Очень длинная запись без длительности, которая…": не найдено время, ожидается формат: "XXч XXм", "XXч", "XXм"`,
-		`11.11, "Работа - 8 часов": ожидается формат времени: "XXч XXм", "XXч", "XXм"`,
+		`11.11 · "ахахах": не найдено время, ожидается формат: "XXч XXм", "XXч", "XXм"`,
+		`11.11 · "Очень длинная запись без длительности, которая…": не найдено время, ожидается формат: "XXч XXм", "XXч", "XXм"`,
+		`11.11 · "Работа - 8 часов": ожидается формат времени: "XXч XXм", "XXч", "XXм"`,
 		`"31.02": дата 31.02 не существует`,
 		`"12.11": дата 12.11.2026 в будущем`,
 	}

@@ -115,7 +115,7 @@ func (e *LineError) Error() string {
 	if len(where) == 0 {
 		return e.Msg
 	}
-	return strings.Join(where, ", ") + ": " + e.Msg
+	return strings.Join(where, " · ") + ": " + e.Msg
 }
 
 const maxDayDuration = 24 * time.Hour
@@ -353,6 +353,8 @@ const maxEntryMinutes = 24 * 60
 var (
 	// В строке нет " - <время>"
 	errNoDuration = errors.New(`не найдено время, ожидается формат: "XXч XXм", "XXч", "XXм"`)
+	// Разделитель прилип к описанию или времени
+	errDurationSeparator = errors.New("перед временем нужны пробелы с обеих сторон дефиса")
 	// После последнего " - " стоит не время
 	errDurationFormat = errors.New(`ожидается формат времени: "XXч XXм", "XXч", "XXм"`)
 )
@@ -360,11 +362,15 @@ var (
 // parseDuration берёт время из конца строки: запись имеет вид "<описание> - <время>". Всё до последнего
 // " - " - описание, в нём могут быть любые числа, версии и ключи задач
 func parseDuration(line string) (time.Duration, error) {
-	i := strings.LastIndex(line, " - ")
+	const separator = " - "
+	if missingDurationSeparatorSpace(line) {
+		return 0, errDurationSeparator
+	}
+	i := strings.LastIndex(line, separator)
 	if i < 0 || strings.TrimSpace(line[:i]) == "" {
 		return 0, errNoDuration
 	}
-	tail := strings.TrimSpace(line[i+len(" - "):])
+	tail := strings.TrimSpace(line[i+len(separator):])
 	if tail == "" {
 		return 0, errNoDuration
 	}
@@ -386,6 +392,18 @@ func parseDuration(line string) (time.Duration, error) {
 		return 0, errors.New("время должно быть больше нуля")
 	}
 	return time.Duration(total) * time.Minute, nil
+}
+
+// missingDurationSeparatorSpace проверяет, что за прилипшим дефисом стоит время
+func missingDurationSeparatorSpace(line string) bool {
+	i := strings.LastIndexByte(line, '-')
+	if i < 1 || i == len(line)-1 || line[i-1] == ' ' && line[i+1] == ' ' {
+		return false
+	}
+	description := strings.TrimSpace(line[:i])
+	tail := strings.TrimSpace(line[i+1:])
+	return description != "" && !strings.HasSuffix(description, "-") &&
+		tail != "" && durationRe.MatchString(strings.ToLower(tail))
 }
 
 // FormatDuration печатает длительность по-человечески: "7ч 30м", "8ч", "45м"
