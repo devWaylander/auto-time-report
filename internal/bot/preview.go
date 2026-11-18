@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
 	"github.com/devWaylander/auto-time-report/internal/calendar"
@@ -151,6 +152,7 @@ func (b *Bot) viewOf(ctx context.Context, w weekState, err error, submit bool, h
 	}
 	switch {
 	case errors.Is(err, errNoPost):
+		keys.ChannelURL = b.weekChannelURL(ctx)
 		return weekView{text: noWeekPostText, markup: previewKeyboard(keys)}
 	case err != nil && w.post.ID != 0:
 		problems := "⚠️ В посте недели ошибки:\n" + formatParseErrors(err)
@@ -407,6 +409,7 @@ type previewKeys struct {
 	PostID     int64
 	Hash       string
 	PostURL    string // кнопка "Пост"; пусто - без неё
+	ChannelURL string // кнопка "В канал", когда ещё нет поста текущей недели
 	Pending    int
 	Unapproved int
 	Filled     bool // все рабочие дни заполнены: можно на проверку
@@ -414,13 +417,16 @@ type previewKeys struct {
 
 // previewKeyboard - кнопки под превью. Сверху действие: в режиме отправки - запись, если есть что
 // записывать, в режиме статуса - переход к отправке. На проверку - только когда заполнены все рабочие дни.
-// Снизу всегда "Обновить" и "Пост"
+// Снизу "Обновить" и ссылка на пост или канал
 func previewKeyboard(k previewKeys) models.ReplyMarkup {
 	refresh := models.InlineKeyboardButton{Text: "🔄 Обновить", CallbackData: viewStatus}
 	if k.Submit {
 		refresh.CallbackData = viewSubmit
 	}
 	nav := append([]models.InlineKeyboardButton{refresh}, postButton(k.PostURL)...)
+	if k.ChannelURL != "" {
+		nav = append(nav, models.InlineKeyboardButton{Text: "🔗 В канал", URL: k.ChannelURL})
+	}
 
 	var row []models.InlineKeyboardButton
 	if !k.Submit {
@@ -477,6 +483,36 @@ func postURL(chatID, messageID int64) string {
 	return fmt.Sprintf("https://t.me/c/%s/%d", id, messageID)
 }
 
+// weekChannelURL открывает последний пост или сам канал, если бот ещё не видел постов
+func (b *Bot) weekChannelURL(ctx context.Context) string {
+	post, err := b.store.LatestWeekPostInChannel(ctx, b.userID, b.cfg.ChannelID)
+	if err == nil {
+		if link := postURL(post.ChatID, post.MessageID); link != "" {
+			return link
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		slog.Warn("load last post for channel link", "error", err)
+	}
+
+	chat, err := b.api.GetChat(ctx, &tgbot.GetChatParams{ChatID: b.cfg.ChannelID})
+	if err != nil {
+		slog.Warn("load channel link", "error", b.redact(err.Error()))
+		return ""
+	}
+	if chat == nil {
+		return ""
+	}
+	if chat.Username != "" {
+		return "https://t.me/" + chat.Username
+	}
+	if chat.PinnedMessage != nil {
+		if link := postURL(chat.ID, int64(chat.PinnedMessage.ID)); link != "" {
+			return link
+		}
+	}
+	return chat.InviteLink
+}
+
 // hashText - короткий отпечаток текста поста: кнопка превью сработает, только если пост с тех пор не менялся
 func hashText(s string) string {
 	sum := sha256.Sum256([]byte(s))
@@ -496,7 +532,8 @@ func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
 		if b.active.WeekStart.Format(time.DateOnly) == week.Format(time.DateOnly) && b.active.Header != "" {
 			return nil
 		}
-		view := weekView{text: "📝 " + noWeekPostText, markup: previewKeyboard(previewKeys{})}
+		view := b.viewOf(ctx, weekState{}, errNoPost, false, "")
+		view.text = "📝 " + view.text
 		return b.showActive(ctx, view, store.ActiveWeekView{WeekStart: week})
 	}
 	if err != nil {

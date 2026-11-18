@@ -28,9 +28,10 @@ type apiCall struct {
 
 // fakeTelegram записывает вызовы Bot API и отвечает успехом
 type fakeTelegram struct {
-	mu     sync.Mutex
-	calls  []apiCall
-	nextID int
+	mu       sync.Mutex
+	calls    []apiCall
+	nextID   int
+	chatInfo models.ChatFullInfo
 	// Правка сообщения не проходит: его будто удалили в чате
 	editsFail bool
 	// Telegram больше не даёт удалить старое сообщение
@@ -52,6 +53,7 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.calls = append(f.calls, apiCall{method: method, params: params})
 	f.nextID++
 	id := f.nextID
+	chatInfo := f.chatInfo
 	editsFail, deletesFail, markupFails := f.editsFail, f.deletesFail, f.markupFails
 	f.mu.Unlock()
 
@@ -73,6 +75,8 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch method {
 	case "getMe":
 		result = map[string]any{"id": 1, "is_bot": true, "first_name": "bot", "username": "bot"}
+	case "getChat":
+		result = chatInfo
 	case "sendMessage", "editMessageText", "editMessageReplyMarkup":
 		result = map[string]any{"message_id": 1000 + id, "date": 0, "chat": map[string]any{"id": 42, "type": "private"}}
 	}
@@ -435,6 +439,8 @@ func TestMissingCurrentWeekPost(t *testing.T) {
 	b, tg, runner, st := newTelegramBot(t)
 	ctx := context.Background()
 	old := channelPost("23.10\nРабота - 8ч", day(10, 23))
+	old.Chat.ID = -1001234567890
+	b.cfg.ChannelID = old.Chat.ID
 	b.onChannelPost(ctx, old, false)
 	b.onMessage(ctx, dm("/status"))
 	previousID := liveID(b)
@@ -457,8 +463,9 @@ func TestMissingCurrentWeekPost(t *testing.T) {
 	if text := lastParam(calls, "sendMessage", "text"); text != "📝 "+noWeekPostText {
 		t.Fatalf("reminder = %q, want a missing current week post", text)
 	}
-	if markup := lastParam(calls, "sendMessage", "reply_markup"); strings.Contains(markup, "https://t.me/") {
-		t.Fatalf("reminder links to a past week: %s", markup)
+	if markup := lastParam(calls, "sendMessage", "reply_markup"); !strings.Contains(markup, "В канал") ||
+		!strings.Contains(markup, fmt.Sprintf("https://t.me/c/1234567890/%d", old.ID)) || countMethod(calls, "getChat") != 0 {
+		t.Fatalf("reminder does not link to the last known post: %+v", calls)
 	}
 	if lastParam(calls, "deleteMessage", "message_id") != previousID ||
 		lastParam(calls, "editMessageText", "message_id") != previousID ||
@@ -468,9 +475,52 @@ func TestMissingCurrentWeekPost(t *testing.T) {
 	}
 
 	waitingID := liveID(b)
-	b.onChannelPost(ctx, channelPost("26.10\nРабота - 8ч", day(10, 26)), false)
-	if calls := tg.take(); !inPlace(calls, waitingID, "Неделя 26.10") || liveID(b) != waitingID {
+	next := channelPost("26.10\nРабота - 8ч", day(10, 26))
+	next.Chat.ID = old.Chat.ID
+	b.onChannelPost(ctx, next, false)
+	calls = tg.take()
+	if !inPlace(calls, waitingID, "Неделя 26.10") || liveID(b) != waitingID {
 		t.Fatalf("waiting message was not converted to the new preview: %+v", calls)
+	}
+	if markup := lastParam(calls, "editMessageText", "reply_markup"); strings.Contains(markup, "В канал") ||
+		!strings.Contains(markup, fmt.Sprintf("https://t.me/c/1234567890/%d", next.ID)) {
+		t.Fatalf("preview does not link to the current post: %s", markup)
+	}
+}
+
+func TestMissingWeekPostLinksToConfiguredChannel(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	b.cfg.ChannelID = -1001234567890
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		info models.ChatFullInfo
+		url  string
+	}{
+		{"public", models.ChatFullInfo{Username: "example_channel"}, "https://t.me/example_channel"},
+		{"private invite", models.ChatFullInfo{InviteLink: "https://t.me/+example"}, "https://t.me/+example"},
+		{"private pinned", models.ChatFullInfo{PinnedMessage: &models.Message{ID: 123}}, "https://t.me/c/1234567890/123"},
+		{"no available link", models.ChatFullInfo{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tg.mu.Lock()
+			tc.info.ID = b.cfg.ChannelID
+			tg.chatInfo = tc.info
+			tg.mu.Unlock()
+			b.onMessage(ctx, dm("/status"))
+			calls := tg.take()
+			if got := lastParam(calls, "getChat", "chat_id"); got != fmt.Sprint(b.cfg.ChannelID) {
+				t.Fatalf("getChat for %q, want the configured channel", got)
+			}
+			markup := lastParam(calls, "sendMessage", "reply_markup")
+			if tc.url == "" {
+				if strings.Contains(markup, "В канал") {
+					t.Fatalf("unexpected channel button: %s", markup)
+				}
+			} else if !strings.Contains(markup, "В канал") || !strings.Contains(markup, tc.url) {
+				t.Fatalf("missing channel link %q: %s", tc.url, markup)
+			}
+		})
 	}
 }
 

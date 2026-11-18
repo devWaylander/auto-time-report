@@ -66,6 +66,14 @@ func (s *Store) LatestWeekPost(ctx context.Context, userID int64) (WeekPost, err
 		ORDER BY posted_at DESC, id DESC LIMIT 1`, userID))
 }
 
+// LatestWeekPostInChannel возвращает последний известный пост из указанного канала
+func (s *Store) LatestWeekPostInChannel(ctx context.Context, userID, chatID int64) (WeekPost, error) {
+	return scanWeekPost(s.db.QueryRowContext(ctx, `
+		SELECT id, user_id, chat_id, message_id, text, posted_at, edited_at, week_start
+		FROM week_posts WHERE user_id = ? AND chat_id = ?
+		ORDER BY posted_at DESC, id DESC LIMIT 1`, userID, chatID))
+}
+
 // WeekPostForWeek ищет пост за календарную неделю; для старых постов используется дата публикации
 func (s *Store) WeekPostForWeek(ctx context.Context, userID int64, monday time.Time) (WeekPost, error) {
 	return scanWeekPost(s.db.QueryRowContext(ctx, `
