@@ -68,9 +68,15 @@ func (w weekState) worklog(issue string, date time.Time) (parser.Worklog, bool) 
 
 var errNoPost = errors.New("no week post")
 
-// loadWeek читает последний пост и сверяет его с уже записанным. Ошибки формата поста возвращаются как есть
+const noWeekPostText = "Поста текущей недели в канале пока нет"
+
+func (b *Bot) currentWeekPost(ctx context.Context) (store.WeekPost, error) {
+	return b.store.WeekPostForWeek(ctx, b.userID, calendar.WeekStart(b.now()))
+}
+
+// loadWeek читает пост текущей недели и сверяет его с уже записанным
 func (b *Bot) loadWeek(ctx context.Context) (weekState, error) {
-	post, err := b.store.LatestWeekPost(ctx, b.userID)
+	post, err := b.currentWeekPost(ctx)
 	if errors.Is(err, store.ErrNotFound) {
 		return weekState{}, errNoPost
 	}
@@ -89,7 +95,7 @@ func (b *Bot) loadWeekOf(ctx context.Context, post store.WeekPost) (weekState, e
 
 	// Целые недели, как в превью: записанный в Jira день мог пропасть из поста
 	dates := report.Dates()
-	subs, err := b.store.SubmissionsBetween(ctx, b.userID, weekStart(dates[0]), weekStart(dates[len(dates)-1]).AddDate(0, 0, 6))
+	subs, err := b.store.SubmissionsBetween(ctx, b.userID, calendar.WeekStart(dates[0]), calendar.WeekStart(dates[len(dates)-1]).AddDate(0, 0, 6))
 	if err != nil {
 		return weekState{}, err
 	}
@@ -144,7 +150,7 @@ func (b *Bot) viewOf(ctx context.Context, w weekState, err error, submit bool, h
 	}
 	switch {
 	case errors.Is(err, errNoPost):
-		return weekView{text: "Поста текущей недели в канале пока нет", markup: previewKeyboard(keys)}
+		return weekView{text: noWeekPostText, markup: previewKeyboard(keys)}
 	case err != nil && w.post.ID != 0:
 		problems := "⚠️ В посте недели ошибки:\n" + formatParseErrors(err)
 		return weekView{text: withHeader(problems), markup: previewKeyboard(keys), problems: problems, live: true}
@@ -216,7 +222,7 @@ type previewInput struct {
 
 func (b *Bot) previewInput(ctx context.Context, w weekState) previewInput {
 	dates := w.report.Dates()
-	from, to := weekStart(dates[0]), weekStart(dates[len(dates)-1]).AddDate(0, 0, 6)
+	from, to := calendar.WeekStart(dates[0]), calendar.WeekStart(dates[len(dates)-1]).AddDate(0, 0, 6)
 	today := b.today()
 
 	in := previewInput{Today: today}
@@ -351,7 +357,7 @@ func renderPreview(in previewInput) string {
 		fmt.Fprintf(&b, "⚠️ Нет записей за рабочие дни: %s\n", strings.Join(days, ", "))
 	}
 	// Внутри одной недели хватает дня недели; если превью шире, к нему добавляется дата
-	oneWeek := weekStart(first).Equal(weekStart(last))
+	oneWeek := calendar.WeekStart(first).Equal(calendar.WeekStart(last))
 	var short []string
 	for _, d := range in.Days {
 		if s := d.shortfall(); s > 0 {
@@ -467,22 +473,18 @@ func hashText(s string) string {
 	return hex.EncodeToString(sum[:5])
 }
 
-func weekStart(d time.Time) time.Time {
-	offset := (int(d.Weekday()) + 6) % 7
-	return d.AddDate(0, 0, -offset)
-}
-
-// DailyReminder - напоминание notify: за сегодня в посте нет записей. Кнопка "Пост" ведёт к последнему
-// посту: если за эту неделю его ещё нет, это место в канале рядом с концом ленты
+// DailyReminder сообщает об отсутствии поста текущей недели или записей за сегодня
 func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
-	url := ""
-	if post, err := b.store.LatestWeekPost(ctx, b.userID); err == nil {
-		url = postURL(post.ChatID, post.MessageID)
-	} else if !errors.Is(err, store.ErrNotFound) {
-		slog.Error("load week post", "error", err)
+	post, err := b.store.WeekPostForWeek(ctx, b.userID, calendar.WeekStart(date))
+	if errors.Is(err, store.ErrNotFound) {
+		_, err := b.send(ctx, "📝 "+noWeekPostText, previewKeyboard(previewKeys{}))
+		return err
 	}
-	_, err := b.send(ctx, fmt.Sprintf("📝 В посте недели отсутствуют записи за сегодня (%s %s)",
-		strings.ToLower(weekdays[date.Weekday()]), date.Format("02.01")), statusKeyboard(url))
+	if err != nil {
+		return err
+	}
+	_, err = b.send(ctx, fmt.Sprintf("📝 В посте недели отсутствуют записи за сегодня (%s %s)",
+		strings.ToLower(weekdays[date.Weekday()]), date.Format("02.01")), statusKeyboard(postURL(post.ChatID, post.MessageID)))
 	return err
 }
 

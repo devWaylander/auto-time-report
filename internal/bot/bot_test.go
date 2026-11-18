@@ -387,7 +387,7 @@ func TestWeekStart(t *testing.T) {
 		day(10, 25): day(10, 19),
 		day(10, 26): day(10, 26),
 	} {
-		if got := weekStart(d); !got.Equal(want) {
+		if got := calendar.WeekStart(d); !got.Equal(want) {
 			t.Errorf("weekStart(%s) = %s, want %s", d.Format("02.01"), got.Format("02.01"), want.Format("02.01"))
 		}
 	}

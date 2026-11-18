@@ -409,6 +409,9 @@ func TestNextWeekPostAndLateFix(t *testing.T) {
 
 	old := channelPost("19.10\nРабота - 8ч", day(10, 19))
 	b.onChannelPost(ctx, old, false)
+	// Правка прошлой недели с новой датой не переводит старый пост в текущую неделю
+	old = edit(old, "19.10\nРабота - 8ч\n\n26.10\nСозвон - 1ч", day(10, 26))
+	b.onChannelPost(ctx, old, true)
 
 	// Новый пост с опечаткой игнорируется, после исправления становится постом недели
 	next := channelPost("26.10\nРабота", day(10, 26))
@@ -432,6 +435,29 @@ func TestNextWeekPostAndLateFix(t *testing.T) {
 		t.Fatalf("last week's post edit not saved: %+v %v", stored, err)
 	}
 	tg.take()
+}
+
+func TestMissingCurrentWeekPost(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	ctx := context.Background()
+	old := channelPost("23.10\nРабота - 8ч", day(10, 23))
+	b.onChannelPost(ctx, old, false)
+	b.clock = func() time.Time { return day(10, 26) }
+
+	b.onMessage(ctx, dm("/status"))
+	if text := lastParam(tg.take(), "sendMessage", "text"); text != noWeekPostText {
+		t.Fatalf("status = %q, want a missing current week post", text)
+	}
+	if err := b.DailyReminder(ctx, b.today()); err != nil {
+		t.Fatal(err)
+	}
+	calls := tg.take()
+	if text := lastParam(calls, "sendMessage", "text"); text != "📝 "+noWeekPostText {
+		t.Fatalf("reminder = %q, want a missing current week post", text)
+	}
+	if markup := lastParam(calls, "sendMessage", "reply_markup"); strings.Contains(markup, "https://t.me/") {
+		t.Fatalf("reminder links to a past week: %s", markup)
+	}
 }
 
 func TestStaleEditDoesNotRollBack(t *testing.T) {

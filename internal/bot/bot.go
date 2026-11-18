@@ -362,7 +362,7 @@ func (b *Bot) showPreview(ctx context.Context, submit bool, messageID int, heade
 func (b *Bot) onPostChanged(ctx context.Context, post store.WeekPost) {
 	l, tracked := b.live[post.ID]
 	// Кнопки отправки есть только у последнего поста: прошлую неделю отправить нельзя
-	submit := tracked && l.submit && b.isLatest(ctx, post)
+	submit := tracked && l.submit && b.isCurrentWeek(post)
 	w, err := b.loadWeekOf(ctx, post)
 	v := b.viewOf(ctx, w, err, submit, l.header)
 	if !v.live {
@@ -434,9 +434,15 @@ func (b *Bot) forgetLive(messageID int) {
 	}
 }
 
-func (b *Bot) isLatest(ctx context.Context, post store.WeekPost) bool {
-	latest, err := b.store.LatestWeekPost(ctx, b.userID)
-	return err == nil && latest.ID == post.ID
+func (b *Bot) isCurrentWeek(post store.WeekPost) bool {
+	return b.postWeek(post) == calendar.WeekStart(b.now()).Format(time.DateOnly)
+}
+
+func (b *Bot) postWeek(post store.WeekPost) string {
+	if post.WeekStart.IsZero() {
+		return calendar.WeekStart(post.PostedAt.In(b.cfg.Location)).Format(time.DateOnly)
+	}
+	return post.WeekStart.Format(time.DateOnly)
 }
 
 // emptyDatesWarning - предупреждение о датах без записей. Это не ошибка: день может быть ещё не дописан
@@ -461,6 +467,8 @@ func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) bool {
 	if err != nil {
 		return false
 	}
+	dates := report.Dates()
+	post.WeekStart = calendar.WeekStart(dates[len(dates)-1])
 	current, err := b.store.LatestWeekPost(ctx, b.userID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -468,9 +476,15 @@ func (b *Bot) considerNewPost(ctx context.Context, post store.WeekPost) bool {
 		slog.Error("load week post", "error", err)
 		return false
 	default:
-		if !weekStart(report.Dates()[0]).After(b.lastWeekOf(current)) {
+		if b.postWeek(post) <= b.postWeek(current) {
 			return false
 		}
+	}
+	if _, err := b.store.WeekPostForWeek(ctx, b.userID, post.WeekStart); !errors.Is(err, store.ErrNotFound) {
+		if err != nil {
+			slog.Error("find post for week", "error", err)
+		}
+		return false
 	}
 	saved, _, err := b.store.SaveWeekPost(ctx, post)
 	if err != nil {
@@ -545,22 +559,11 @@ func (b *Bot) ensureBotButton(ctx context.Context, msg *models.Message) {
 	}
 }
 
-// lastWeekOf - понедельник последней недели в посте; если пост не разбирается, неделя его публикации
-func (b *Bot) lastWeekOf(post store.WeekPost) time.Time {
-	report, err := parser.Parse(post.Text, b.cfg.DefaultIssue, b.now())
-	if err != nil {
-		p := post.PostedAt.In(b.cfg.Location)
-		return weekStart(time.Date(p.Year(), p.Month(), p.Day(), 0, 0, 0, 0, b.cfg.Location))
-	}
-	dates := report.Dates()
-	return weekStart(dates[len(dates)-1])
-}
-
 // changedSubmitted предупреждает о правках в днях, которые уже записаны в Jira: бот их не перезаписывает
 func (b *Bot) changedSubmitted(ctx context.Context, report parser.Report) (string, error) {
 	// Берём целые недели: удалённый крайний день тоже должен попасть в проверку
 	dates := report.Dates()
-	from, to := weekStart(dates[0]), weekStart(dates[len(dates)-1]).AddDate(0, 0, 6)
+	from, to := calendar.WeekStart(dates[0]), calendar.WeekStart(dates[len(dates)-1]).AddDate(0, 0, 6)
 	subs, err := b.store.SubmissionsBetween(ctx, b.userID, from, to)
 	if err != nil {
 		return "", err

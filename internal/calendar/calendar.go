@@ -21,6 +21,12 @@ const (
 	Off
 )
 
+// WeekStart возвращает полночь понедельника в часовом поясе даты
+func WeekStart(date time.Time) time.Time {
+	midnight := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	return midnight.AddDate(0, 0, -((int(date.Weekday()) + 6) % 7))
+}
+
 // Norm - сколько часов положено отработать в такой день
 func (k DayKind) Norm() time.Duration {
 	switch k {

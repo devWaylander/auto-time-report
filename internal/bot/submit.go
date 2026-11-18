@@ -55,7 +55,7 @@ func (b *Bot) onSubmitButton(ctx context.Context, cq *models.CallbackQuery, mess
 		return
 	}
 
-	post, err := b.store.LatestWeekPost(ctx, b.userID)
+	post, err := b.currentWeekPost(ctx)
 	if err != nil || post.ID != postID || hashText(post.Text) != hash {
 		b.answer(ctx, cq, "Пост изменился, свежий предпросмотр ниже", false)
 		b.sendPreview(ctx, true)

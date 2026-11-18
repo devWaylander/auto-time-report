@@ -17,6 +17,7 @@ type WeekPost struct {
 	Text      string
 	PostedAt  time.Time
 	EditedAt  time.Time // нулевое значение - пост не редактировался
+	WeekStart time.Time // неделя на момент принятия поста, у старых записей может отсутствовать
 }
 
 // SaveWeekPost сохраняет новый пост или обновляет текст уже известного (по chat_id и message_id).
@@ -24,14 +25,18 @@ type WeekPost struct {
 // только если правка не старше сохранённой. updated = false - пришла устаревшая версия, в базе осталась прежняя,
 // и вернулась именно она
 func (s *Store) SaveWeekPost(ctx context.Context, p WeekPost) (saved WeekPost, updated bool, err error) {
+	var weekStart sql.NullString
+	if !p.WeekStart.IsZero() {
+		weekStart = sql.NullString{String: formatDate(p.WeekStart), Valid: true}
+	}
 	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO week_posts (user_id, chat_id, message_id, text, posted_at, edited_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO week_posts (user_id, chat_id, message_id, text, posted_at, edited_at, week_start)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (chat_id, message_id) DO UPDATE SET text = excluded.text, edited_at = excluded.edited_at
 		WHERE excluded.edited_at >= COALESCE(week_posts.edited_at, '')
-		RETURNING id`,
-		p.UserID, p.ChatID, p.MessageID, p.Text, formatTime(p.PostedAt), nullTime(p.EditedAt),
-	).Scan(&p.ID)
+		RETURNING id, week_start`,
+		p.UserID, p.ChatID, p.MessageID, p.Text, formatTime(p.PostedAt), nullTime(p.EditedAt), weekStart,
+	).Scan(&p.ID, &weekStart)
 	if errors.Is(err, sql.ErrNoRows) {
 		current, err := s.WeekPostByMessage(ctx, p.ChatID, p.MessageID)
 		return current, false, err
@@ -39,31 +44,47 @@ func (s *Store) SaveWeekPost(ctx context.Context, p WeekPost) (saved WeekPost, u
 	if err != nil {
 		return WeekPost{}, false, fmt.Errorf("upsert week post: %w", err)
 	}
+	p.WeekStart, err = parseNullDate(weekStart)
+	if err != nil {
+		return WeekPost{}, false, err
+	}
 	return p, true, nil
 }
 
 // WeekPostByMessage ищет сохранённый пост по сообщению в канале, ErrNotFound если такого нет
 func (s *Store) WeekPostByMessage(ctx context.Context, chatID, messageID int64) (WeekPost, error) {
 	return scanWeekPost(s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, chat_id, message_id, text, posted_at, edited_at
+		SELECT id, user_id, chat_id, message_id, text, posted_at, edited_at, week_start
 		FROM week_posts WHERE chat_id = ? AND message_id = ?`, chatID, messageID))
 }
 
 // LatestWeekPost возвращает самый свежий пост пользователя, ErrNotFound если постов нет
 func (s *Store) LatestWeekPost(ctx context.Context, userID int64) (WeekPost, error) {
 	return scanWeekPost(s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, chat_id, message_id, text, posted_at, edited_at
+		SELECT id, user_id, chat_id, message_id, text, posted_at, edited_at, week_start
 		FROM week_posts WHERE user_id = ?
 		ORDER BY posted_at DESC, id DESC LIMIT 1`, userID))
 }
 
+// WeekPostForWeek ищет пост за календарную неделю; для старых постов используется дата публикации
+func (s *Store) WeekPostForWeek(ctx context.Context, userID int64, monday time.Time) (WeekPost, error) {
+	return scanWeekPost(s.db.QueryRowContext(ctx, `
+		SELECT id, user_id, chat_id, message_id, text, posted_at, edited_at, week_start
+		FROM week_posts WHERE user_id = ? AND (
+			week_start = ? OR (week_start IS NULL AND posted_at >= ? AND posted_at < ?)
+		)
+		ORDER BY week_start DESC, posted_at DESC, id DESC LIMIT 1`,
+		userID, formatDate(monday), formatTime(monday), formatTime(monday.AddDate(0, 0, 7))))
+}
+
 func scanWeekPost(row scanner) (WeekPost, error) {
 	var (
-		p        WeekPost
-		postedAt string
-		editedAt sql.NullString
+		p         WeekPost
+		postedAt  string
+		editedAt  sql.NullString
+		weekStart sql.NullString
 	)
-	err := row.Scan(&p.ID, &p.UserID, &p.ChatID, &p.MessageID, &p.Text, &postedAt, &editedAt)
+	err := row.Scan(&p.ID, &p.UserID, &p.ChatID, &p.MessageID, &p.Text, &postedAt, &editedAt, &weekStart)
 	if errors.Is(err, sql.ErrNoRows) {
 		return WeekPost{}, ErrNotFound
 	}
@@ -76,5 +97,15 @@ func scanWeekPost(row scanner) (WeekPost, error) {
 	if p.EditedAt, err = parseNullTime(editedAt); err != nil {
 		return WeekPost{}, err
 	}
+	if p.WeekStart, err = parseNullDate(weekStart); err != nil {
+		return WeekPost{}, err
+	}
 	return p, nil
+}
+
+func parseNullDate(s sql.NullString) (time.Time, error) {
+	if !s.Valid {
+		return time.Time{}, nil
+	}
+	return parseDate(s.String)
 }

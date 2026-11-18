@@ -102,7 +102,7 @@ func (n *Notifier) Tick(ctx context.Context, now time.Time) error {
 // weeklyDay - в какой день этой недели слать превью: выбранный день, а если он выходной или праздник,
 // ближайший рабочий день перед ним на той же неделе
 func (n *Notifier) weeklyDay(ctx context.Context, today time.Time, weekday time.Weekday) (time.Time, error) {
-	monday := today.AddDate(0, 0, -((int(today.Weekday()) + 6) % 7))
+	monday := calendar.WeekStart(today)
 	day := monday.AddDate(0, 0, (int(weekday)+6)%7)
 	for ; !day.Before(monday); day = day.AddDate(0, 0, -1) {
 		kind, _ := n.cal.Day(ctx, day)
@@ -138,10 +138,10 @@ func (n *Notifier) send(ctx context.Context, kind store.NotificationKind, day ti
 	return nil
 }
 
-// postHasDate - есть ли в последнем посте записи за дату. Пост с ошибками считается без записей:
+// postHasDate - есть ли в посте этой недели записи за дату. Пост с ошибками считается без записей:
 // об ошибках бот уже написал при правке, а напоминание лишним не будет
 func (n *Notifier) postHasDate(ctx context.Context, now, date time.Time) (bool, error) {
-	post, err := n.store.LatestWeekPost(ctx, n.userID)
+	post, err := n.store.WeekPostForWeek(ctx, n.userID, calendar.WeekStart(date))
 	if errors.Is(err, store.ErrNotFound) {
 		return false, nil
 	}
