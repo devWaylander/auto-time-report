@@ -296,7 +296,7 @@ var weekdays = [...]string{"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб
 func renderPreview(in previewInput) string {
 	var b strings.Builder
 	first, last := in.Days[0].Date, in.Days[len(in.Days)-1].Date
-	fmt.Fprintf(&b, "<b>Неделя %s-%s</b>\n\n", first.Format("02.01"), last.Format("02.01.2006"))
+	fmt.Fprintf(&b, "<b>Неделя %s-%s</b>\n", first.Format("02.01"), last.Format("02.01.2006"))
 
 	totals := make([]string, len(in.Days))
 	width := 0
@@ -355,7 +355,7 @@ func renderPreview(in previewInput) string {
 	}
 	b.WriteString("</pre>\n")
 
-	fmt.Fprintf(&b, "\n<b>Итого: %s</b> из %s по норме", parser.FormatDuration(in.Total), parser.FormatDuration(in.Norm))
+	fmt.Fprintf(&b, "<b>Итого: %s</b> из %s по норме", parser.FormatDuration(in.Total), parser.FormatDuration(in.Norm))
 	switch {
 	case in.Total < in.Norm:
 		fmt.Fprintf(&b, " (не хватает %s)", parser.FormatDuration(in.Norm-in.Total))

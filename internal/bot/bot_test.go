@@ -178,13 +178,13 @@ func TestPreviewInputAndRender(t *testing.T) {
 		t.Errorf("today is marked %d times:\n%s", n, text)
 	}
 	for _, want := range []string{
-		"<b>Неделя 19.10-23.10.2026</b>\n\n<pre>",
+		"<b>Неделя 19.10-23.10.2026</b>\n<pre>",
 		"Пн 19.10  8ч  ☑️\n",
 		"Вт 20.10  8ч  🔹\n",
 		"Ср 21.10      ▫️\n",
 		"ABC-1 6ч, ABC-2 2ч",
 		"Пт 23.10      ▫️ сокращённый · сегодня",
-		"</pre>\n\n<b>Итого: 16ч</b> из 39ч по норме (не хватает 23ч)",
+		"</pre>\n<b>Итого: 16ч</b> из 39ч по норме (не хватает 23ч)",
 		"К записи в Jira: 2",
 	} {
 		if !strings.Contains(text, want) {
