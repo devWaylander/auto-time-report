@@ -161,7 +161,10 @@ func (b *Bot) sendWeekArchive(ctx context.Context, msg *models.Message, id strin
 		b.notify(ctx, "Итог недели недоступен")
 		return
 	}
-	post, err := b.store.WeekArchive(ctx, b.userID, b.cfg.ChannelID, postID)
+	b.postMu.Lock()
+	defer b.postMu.Unlock()
+
+	archive, err := b.store.WeekArchive(ctx, b.userID, b.cfg.ChannelID, postID)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			slog.Error("load week archive", "error", err)
@@ -169,11 +172,20 @@ func (b *Bot) sendWeekArchive(ctx context.Context, msg *models.Message, id strin
 		b.notify(ctx, "Итог недели недоступен")
 		return
 	}
-	row := append(postButton(postURL(post.ChatID, post.MessageID)),
+	row := append(postButton(postURL(b.cfg.ChannelID, archive.ChannelMessageID)),
 		models.InlineKeyboardButton{Text: "✖️ Скрыть", CallbackData: hideData})
-	if _, err := b.send(ctx, post.ArchiveText, models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}}); err != nil {
+	card, err := b.send(ctx, archive.Text, models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}})
+	if err != nil {
 		slog.Error("send week archive", "error", err)
 		return
+	}
+	if err := b.store.SaveArchiveMessage(context.WithoutCancel(ctx), postID, card.ID); err != nil {
+		slog.Error("save archive message", "error", err)
+		b.retireMessage(ctx, card.ID, "Итог недели не сохранён")
+		return
+	}
+	if archive.MessageID != 0 && archive.MessageID != card.ID {
+		b.retireMessage(ctx, archive.MessageID, "Итог недели обновлён")
 	}
 	if err := b.deleteMessage(ctx, msg.Chat.ID, msg.ID); err != nil {
 		slog.Warn("delete archive command", "error", err)

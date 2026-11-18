@@ -373,16 +373,21 @@ func (b *Bot) showActive(ctx context.Context, v weekView, next store.ActiveWeekV
 }
 
 func (b *Bot) retireActive(ctx context.Context, old, next store.ActiveWeekView) {
-	if err := b.deleteMessage(ctx, b.cfg.OwnerID, old.MessageID); err == nil || strings.Contains(err.Error(), "message to delete not found") {
-		return
-	}
 	text := "Предпросмотр устарел"
 	if old.WeekStart.Format(time.DateOnly) != next.WeekStart.Format(time.DateOnly) {
 		text = fmt.Sprintf("Неделя с %s · прошлый предпросмотр", old.WeekStart.Format("02.01.2006"))
 	}
+	b.retireMessage(ctx, old.MessageID, text)
+}
+
+// retireMessage удаляет старое сообщение или сворачивает его до одной строки без кнопок
+func (b *Bot) retireMessage(ctx context.Context, messageID int, text string) {
+	if err := b.deleteMessage(ctx, b.cfg.OwnerID, messageID); err == nil || strings.Contains(err.Error(), "message to delete not found") {
+		return
+	}
 	noButtons := models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
-	if err := b.editMessage(ctx, old.MessageID, text, noButtons); err != nil {
-		slog.Warn("retire preview", "error", err)
+	if err := b.editMessage(ctx, messageID, text, noButtons); err != nil {
+		slog.Warn("retire message", "error", err)
 	}
 }
 

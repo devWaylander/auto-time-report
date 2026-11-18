@@ -92,12 +92,40 @@ func (s *Store) WeekPostForWeek(ctx context.Context, userID int64, monday time.T
 		userID, formatDate(monday), formatTime(monday), formatTime(monday.AddDate(0, 0, 7))))
 }
 
+// WeekArchive - сохранённый итог и его последнее сообщение в личке
+type WeekArchive struct {
+	Text             string
+	ChannelMessageID int64
+	MessageID        int
+}
+
 // WeekArchive возвращает сохранённый итог поста из канала пользователя
-func (s *Store) WeekArchive(ctx context.Context, userID, chatID, postID int64) (WeekPost, error) {
-	return scanWeekPost(s.db.QueryRowContext(ctx, `
-		SELECT `+weekPostColumns+`
+func (s *Store) WeekArchive(ctx context.Context, userID, chatID, postID int64) (WeekArchive, error) {
+	var archive WeekArchive
+	err := s.db.QueryRowContext(ctx, `
+		SELECT archive_text, message_id, COALESCE(archive_message_id, 0)
 		FROM week_posts WHERE id = ? AND user_id = ? AND chat_id = ? AND archive_text IS NOT NULL`,
-		postID, userID, chatID))
+		postID, userID, chatID).Scan(&archive.Text, &archive.ChannelMessageID, &archive.MessageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return WeekArchive{}, ErrNotFound
+	}
+	if err != nil {
+		return WeekArchive{}, fmt.Errorf("load week archive: %w", err)
+	}
+	return archive, nil
+}
+
+// SaveArchiveMessage запоминает последнее сообщение с итогом этого поста
+func (s *Store) SaveArchiveMessage(ctx context.Context, postID int64, messageID int) error {
+	var savedID int
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE week_posts SET archive_message_id = ?
+		WHERE id = ? AND archive_text IS NOT NULL
+		RETURNING archive_message_id`, messageID, postID).Scan(&savedID)
+	if err != nil {
+		return fmt.Errorf("save archive message: %w", err)
+	}
+	return nil
 }
 
 // SaveWeekArchive обновляет итог, пустой текст возвращает пост в работу

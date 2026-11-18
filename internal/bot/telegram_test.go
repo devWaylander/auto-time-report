@@ -1193,3 +1193,70 @@ func TestWeekArchiveButtonLifecycle(t *testing.T) {
 		t.Fatalf("the archived week was lost after rollover: %q", result)
 	}
 }
+
+func TestWeekArchiveReplacesPreviousCard(t *testing.T) {
+	b, tg, runner, st := newTelegramBot(t)
+	ctx := context.Background()
+	saveArchive := func(messageID int64) string {
+		t.Helper()
+		post, _, err := st.SaveWeekPost(ctx, store.WeekPost{
+			UserID: b.userID, ChatID: b.cfg.ChannelID, MessageID: messageID, PostedAt: day(10, 12),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.SaveWeekArchive(ctx, post.ID, "Сохранённый итог недели"); err != nil {
+			t.Fatal(err)
+		}
+		return archiveStartPrefix + strconv.FormatInt(post.ID, 10)
+	}
+	first, other := saveArchive(42), saveArchive(43)
+	b.onMessage(ctx, dm("/status"))
+	active := liveID(b)
+	tg.take()
+
+	b.onMessage(ctx, dm("/start "+first))
+	tg.take()
+	post, err := st.WeekPostByMessage(ctx, b.cfg.ChannelID, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := st.WeekArchive(ctx, b.userID, b.cfg.ChannelID, post.ID)
+	if err != nil || old.MessageID == 0 {
+		t.Fatalf("archive card was not saved: %+v, %v", old, err)
+	}
+	b.onMessage(ctx, dm("/start "+other))
+	if calls := tg.take(); countMethod(calls, "deleteMessage") != 1 {
+		t.Fatalf("opening another archive touched the previous card: %+v", calls)
+	}
+
+	restarted, err := New(b.cfg, st, b.cal, runner, b.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = restarted
+	tg.take()
+	b.onMessage(ctx, dm("/start "+first))
+	calls := tg.take()
+	if countMethod(calls, "sendMessage") != 1 || countMethod(calls, "deleteMessage") != 2 || liveID(b) != active ||
+		!slices.ContainsFunc(calls, func(c apiCall) bool {
+			return c.method == "deleteMessage" && c.params["message_id"] == fmt.Sprint(old.MessageID)
+		}) {
+		t.Fatalf("opening the same archive did not replace its card: %+v", calls)
+	}
+
+	current, err := st.WeekArchive(ctx, b.userID, b.cfg.ChannelID, post.ID)
+	if err != nil || current.MessageID == old.MessageID {
+		t.Fatalf("replacement card was not saved: %+v, %v", current, err)
+	}
+	tg.mu.Lock()
+	tg.deletesFail = true
+	tg.mu.Unlock()
+	b.onMessage(ctx, dm("/start "+first))
+	calls = tg.take()
+	if lastParam(calls, "editMessageText", "message_id") != fmt.Sprint(current.MessageID) ||
+		lastParam(calls, "editMessageText", "text") != "Итог недели обновлён" ||
+		lastParam(calls, "editMessageText", "reply_markup") != `{"inline_keyboard":[]}` {
+		t.Fatalf("the previous archive was not compacted after failed deletion: %+v", calls)
+	}
+}
