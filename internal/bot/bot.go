@@ -64,8 +64,9 @@ type Bot struct {
 
 	// Апдейты канала обрабатываются по одному
 	postMu sync.Mutex
-	// Живые сообщения постов по ID поста, под postMu
-	live map[int64]liveMessage
+	// Текущий предпросмотр и предупреждения о старых постах, под postMu
+	active store.ActiveWeekView
+	live   map[int64]liveMessage
 	// Идущая отправка: при остановке её нужно дождаться, чтобы туннель погас
 	inflight sync.WaitGroup
 
@@ -83,7 +84,11 @@ type Bot struct {
 }
 
 func New(cfg Config, st *store.Store, cal Calendar, runner Runner, userID int64) (*Bot, error) {
-	b := &Bot{clock: time.Now, cfg: cfg, store: st, cal: cal, runner: runner, userID: userID}
+	active, err := st.ActiveWeekView(context.Background(), userID)
+	if err != nil {
+		return nil, err
+	}
+	b := &Bot{clock: time.Now, cfg: cfg, store: st, cal: cal, runner: runner, userID: userID, active: active}
 	opts := []tgbot.Option{
 		tgbot.WithDefaultHandler(b.handle),
 		tgbot.WithErrorsHandler(b.onError),
@@ -321,112 +326,163 @@ func (b *Bot) updateKnownPost(ctx context.Context, post store.WeekPost) {
 	b.onPostChanged(ctx, saved)
 }
 
-// liveMessage - живое сообщение поста, последнее, что бот показал о нём (превью, ошибки, предупреждения):
-// правки поста обновляют его на месте. У каждого поста не больше одного, только в памяти: после перезапуска
-// старое сообщение остаётся как есть
+// liveMessage - последнее предупреждение о старом посте
 type liveMessage struct {
 	messageID int
-	problems  string // проблемы поста на момент показа; по ним видно, что появилось новое
-	submit    bool   // превью с кнопками отправки
-	header    string // строка над превью, например у пятничного
+	problems  string
 }
 
-// showPreview показывает превью последнего поста в сообщении messageID или новым сообщением (messageID = 0),
-// header - строка над ним. Показанное сообщение становится живым, прежнее живое удаляется: о посте всегда
-// одно актуальное сообщение
-func (b *Bot) showPreview(ctx context.Context, submit bool, messageID int, header string) error {
+// showPreview показывает текущую неделю, новый предпросмотр заменяет прежний
+func (b *Bot) showPreview(ctx context.Context, submit bool, header string) error {
 	b.postMu.Lock()
 	defer b.postMu.Unlock()
+	return b.showPreviewLocked(ctx, submit, 0, header)
+}
+
+func (b *Bot) showPreviewLocked(ctx context.Context, submit bool, messageID int, header string) error {
+	week := calendar.WeekStart(b.now())
 	w, err := b.loadWeek(ctx)
 	v := b.viewOf(ctx, w, err, submit, header)
-	if messageID != 0 {
-		if err := b.editMessage(ctx, messageID, v.text, v.markup); err != nil {
-			return err
-		}
-	} else {
+	if v.live || errors.Is(err, errNoPost) {
+		return b.showActive(ctx, v, store.ActiveWeekView{
+			MessageID: messageID, PostID: w.post.ID, WeekStart: week,
+			Problems: v.problems, Submit: submit, Header: header,
+		})
+	}
+	_, err = b.send(ctx, v.text, v.markup)
+	return err
+}
+
+// showActive обновляет сообщение на месте или сначала отправляет новое, затем убирает прежнее
+func (b *Bot) showActive(ctx context.Context, v weekView, next store.ActiveWeekView) error {
+	if next.MessageID == 0 {
 		msg, err := b.send(ctx, v.text, v.markup)
 		if err != nil {
 			return err
 		}
-		messageID = msg.ID
+		next.MessageID = msg.ID
+	} else if err := b.editMessage(ctx, next.MessageID, v.text, v.markup); err != nil {
+		if strings.Contains(err.Error(), "message to edit not found") {
+			b.clearActive(ctx)
+		}
+		return err
 	}
-	if v.live {
-		b.setLive(ctx, w.post.ID, liveMessage{messageID: messageID, problems: v.problems, submit: submit, header: header})
+	old := b.active
+	b.active = next
+	if err := b.store.SaveActiveWeekView(context.WithoutCancel(ctx), b.userID, next); err != nil {
+		slog.Error("save active preview", "error", err)
+	}
+	if old.MessageID != 0 && old.MessageID != next.MessageID {
+		b.retireActive(ctx, old, next)
 	}
 	return nil
 }
 
-// onPostChanged обновляет живое сообщение после правки поста. Новая или другая проблема - старое сообщение
-// удаляется и внизу чата приходит новое, с пушем: иначе её не заметить. В остальном сообщение обновляется
-// на месте и в том же виде, без пушей. Вызывать под postMu
+func (b *Bot) retireActive(ctx context.Context, old, next store.ActiveWeekView) {
+	if err := b.deleteMessage(ctx, b.cfg.OwnerID, old.MessageID); err == nil || strings.Contains(err.Error(), "message to delete not found") {
+		return
+	}
+	text := "Предпросмотр устарел"
+	if old.WeekStart.Format(time.DateOnly) != next.WeekStart.Format(time.DateOnly) {
+		text = fmt.Sprintf("Неделя с %s · прошлый предпросмотр", old.WeekStart.Format("02.01.2006"))
+	}
+	noButtons := models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
+	if err := b.editMessage(ctx, old.MessageID, text, noButtons); err != nil {
+		slog.Warn("retire preview", "error", err)
+	}
+}
+
+func (b *Bot) clearActive(ctx context.Context) {
+	b.active = store.ActiveWeekView{}
+	if err := b.store.DeleteActiveWeekView(context.WithoutCancel(ctx), b.userID); err != nil {
+		slog.Error("forget active preview", "error", err)
+	}
+}
+
+// onPostChanged обновляет текущий предпросмотр и сообщает о новых проблемах, вызывать под postMu
 func (b *Bot) onPostChanged(ctx context.Context, post store.WeekPost) {
-	l, tracked := b.live[post.ID]
-	// Кнопки отправки есть только у последнего поста: прошлую неделю отправить нельзя
-	submit := tracked && l.submit && b.isCurrentWeek(post)
 	w, err := b.loadWeekOf(ctx, post)
-	v := b.viewOf(ctx, w, err, submit, l.header)
+	if !b.isCurrentWeek(post) {
+		v := b.viewOf(ctx, w, err, false, "")
+		buttons := append(postButton(postURL(post.ChatID, post.MessageID)),
+			models.InlineKeyboardButton{Text: "✖️ Скрыть", CallbackData: hideData})
+		v.markup = models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{buttons}}
+		b.onOldPostChanged(ctx, post.ID, v)
+		return
+	}
+
+	next := store.ActiveWeekView{PostID: post.ID, WeekStart: calendar.WeekStart(b.now())}
+	active := b.active
+	sameWeek := active.WeekStart.Format(time.DateOnly) == next.WeekStart.Format(time.DateOnly)
+	if sameWeek {
+		next.Submit, next.Header = active.Submit, active.Header
+	}
+	v := b.viewOf(ctx, w, err, next.Submit, next.Header)
+	if !v.live || active.MessageID == 0 && v.problems == "" {
+		return
+	}
+	next.Problems = v.problems
+	// Новая проблема приходит с пушем; сообщение об отсутствии поста превращается в предпросмотр на месте
+	if sameWeek && (active.PostID == 0 || v.problems == "" || active.PostID == post.ID && v.problems == active.Problems) {
+		next.MessageID = active.MessageID
+	}
+	if err := b.showActive(ctx, v, next); err != nil {
+		slog.Warn("update active preview", "error", err)
+	}
+}
+
+func (b *Bot) onOldPostChanged(ctx context.Context, postID int64, v weekView) {
 	if !v.live {
 		return
 	}
+	old, tracked := b.live[postID]
 	switch {
-	case v.problems != "" && (!tracked || v.problems != l.problems):
-		b.dropLive(ctx, post.ID)
-		v = b.viewOf(ctx, w, err, submit, "")
+	case v.problems != "" && v.problems != old.problems:
 		msg, err := b.send(ctx, v.text, v.markup)
 		if err != nil {
 			slog.Error("send post message", "error", err)
 			return
 		}
-		b.setLive(ctx, post.ID, liveMessage{messageID: msg.ID, problems: v.problems, submit: submit})
+		if tracked {
+			if err := b.deleteMessage(ctx, b.cfg.OwnerID, old.messageID); err != nil {
+				slog.Warn("delete post message", "error", err)
+			}
+		}
+		if b.live == nil {
+			b.live = map[int64]liveMessage{}
+		}
+		b.live[postID] = liveMessage{messageID: msg.ID, problems: v.problems}
 	case tracked:
-		if err := b.editMessage(ctx, l.messageID, v.text, v.markup); err != nil {
-			// Сообщение удалили в чате или оно недоступно: больше его не ведём
-			slog.Warn("update live message", "error", err)
-			delete(b.live, post.ID)
+		if err := b.editMessage(ctx, old.messageID, v.text, v.markup); err != nil {
+			slog.Warn("update post message", "error", err)
+			delete(b.live, postID)
 			return
 		}
-		l.problems, l.submit = v.problems, submit
-		b.live[post.ID] = l
+		b.live[postID] = liveMessage{messageID: old.messageID, problems: v.problems}
 	}
 }
 
-// refreshLive перерисовывает живое сообщение поста на месте, например после отправки в Jira
+// refreshLive перерисовывает текущий предпросмотр после отправки в Jira
 func (b *Bot) refreshLive(ctx context.Context, post store.WeekPost) {
 	b.postMu.Lock()
 	defer b.postMu.Unlock()
-	if _, ok := b.live[post.ID]; ok {
-		b.onPostChanged(ctx, post)
+	if b.active.PostID != post.ID || !b.isCurrentWeek(post) {
+		return
 	}
+	current, err := b.store.WeekPostByMessage(ctx, post.ChatID, post.MessageID)
+	if err != nil {
+		slog.Warn("read post after submit", "error", err)
+		return
+	}
+	b.onPostChanged(ctx, current)
 }
 
-// setLive делает сообщение живым сообщением поста; прежнее живое сообщение, если это другое, удаляется;
-// вызывать под postMu
-func (b *Bot) setLive(ctx context.Context, postID int64, l liveMessage) {
-	if old, ok := b.live[postID]; ok && old.messageID != l.messageID {
-		if err := b.deleteMessage(ctx, b.cfg.OwnerID, old.messageID); err != nil {
-			slog.Warn("delete live message", "error", err)
-		}
-	}
-	if b.live == nil {
-		b.live = map[int64]liveMessage{}
-	}
-	b.live[postID] = l
-}
-
-// dropLive удаляет живое сообщение поста. Вызывать под postMu
-func (b *Bot) dropLive(ctx context.Context, postID int64) {
-	if old, ok := b.live[postID]; ok {
-		if err := b.deleteMessage(ctx, b.cfg.OwnerID, old.messageID); err != nil {
-			slog.Warn("delete live message", "error", err)
-		}
-		delete(b.live, postID)
-	}
-}
-
-// forgetLive - сообщение удалено по кнопке "Скрыть": живым оно больше не будет
-func (b *Bot) forgetLive(messageID int) {
+func (b *Bot) forgetLive(ctx context.Context, messageID int) {
 	b.postMu.Lock()
 	defer b.postMu.Unlock()
+	if b.active.MessageID == messageID {
+		b.clearActive(ctx)
+	}
 	for id, l := range b.live {
 		if l.messageID == messageID {
 			delete(b.live, id)
@@ -663,23 +719,37 @@ func (b *Bot) onCallback(ctx context.Context, cq *models.CallbackQuery) {
 	case strings.HasPrefix(cq.Data, settingsPrefix):
 		b.onSettingsButton(ctx, cq, messageID)
 	case cq.Data == viewStatus || cq.Data == viewSubmit || strings.HasPrefix(cq.Data, noticePrefix):
-		b.answer(ctx, cq, "Обновлено", false)
-		if err := b.showPreview(ctx, cq.Data == viewSubmit, messageID, ""); err != nil {
-			slog.Error("send preview", "error", err)
-		}
+		b.onPreviewButton(ctx, cq, messageID)
 	case cq.Data == viewNew:
 		b.answer(ctx, cq, "", false)
 		b.sendPreview(ctx, false)
 	case cq.Data == hideData:
 		b.answer(ctx, cq, "", false)
 		if messageID != 0 {
-			b.forgetLive(messageID)
+			b.forgetLive(ctx, messageID)
 			if err := b.deleteMessage(ctx, b.cfg.OwnerID, messageID); err != nil {
 				slog.Error("hide message", "error", err)
 			}
 		}
 	default:
 		b.answer(ctx, cq, "Кнопка устарела", false)
+	}
+}
+
+func (b *Bot) onPreviewButton(ctx context.Context, cq *models.CallbackQuery, messageID int) {
+	b.postMu.Lock()
+	defer b.postMu.Unlock()
+	if messageID == 0 || messageID != b.active.MessageID {
+		b.answer(ctx, cq, "Предпросмотр устарел", false)
+		return
+	}
+	header, submit := b.active.Header, cq.Data == viewSubmit
+	if b.active.WeekStart.Format(time.DateOnly) != calendar.WeekStart(b.now()).Format(time.DateOnly) {
+		header, submit = "", false
+	}
+	b.answer(ctx, cq, "Обновлено", false)
+	if err := b.showPreviewLocked(ctx, submit, messageID, header); err != nil {
+		slog.Error("refresh preview", "error", err)
 	}
 }
 

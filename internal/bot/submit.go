@@ -47,6 +47,13 @@ func (b *Bot) onSubmitButton(ctx context.Context, cq *models.CallbackQuery, mess
 		return
 	}
 
+	b.postMu.Lock()
+	defer b.postMu.Unlock()
+	if messageID == 0 || messageID != b.active.MessageID {
+		b.answer(ctx, cq, "Предпросмотр устарел", false)
+		return
+	}
+
 	b.mu.Lock()
 	refusal := b.refusalLocked()
 	b.mu.Unlock()
@@ -58,7 +65,9 @@ func (b *Bot) onSubmitButton(ctx context.Context, cq *models.CallbackQuery, mess
 	post, err := b.currentWeekPost(ctx)
 	if err != nil || post.ID != postID || hashText(post.Text) != hash {
 		b.answer(ctx, cq, "Пост изменился, свежий предпросмотр ниже", false)
-		b.sendPreview(ctx, true)
+		if err := b.showPreviewLocked(ctx, true, 0, ""); err != nil {
+			slog.Error("refresh submit preview", "error", err)
+		}
 		return
 	}
 	b.answer(ctx, cq, "", false)

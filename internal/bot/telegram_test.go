@@ -33,6 +33,8 @@ type fakeTelegram struct {
 	nextID int
 	// Правка сообщения не проходит: его будто удалили в чате
 	editsFail bool
+	// Telegram больше не даёт удалить старое сообщение
+	deletesFail bool
 	// Кнопку под постом канала повесить нельзя: у бота нет права редактировать сообщения
 	markupFails bool
 }
@@ -50,7 +52,7 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.calls = append(f.calls, apiCall{method: method, params: params})
 	f.nextID++
 	id := f.nextID
-	editsFail, markupFails := f.editsFail, f.markupFails
+	editsFail, deletesFail, markupFails := f.editsFail, f.deletesFail, f.markupFails
 	f.mu.Unlock()
 
 	if markupFails && method == "editMessageReplyMarkup" {
@@ -60,6 +62,10 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if editsFail && method == "editMessageText" {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message to edit not found"})
+		return
+	}
+	if deletesFail && method == "deleteMessage" {
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message can't be deleted"})
 		return
 	}
 
@@ -237,14 +243,12 @@ func saved(t *testing.T, b *Bot) store.WeekPost {
 	return p
 }
 
-// liveID - живое сообщение последнего поста; пусто - его нет
-func liveID(t *testing.T, b *Bot) string {
-	t.Helper()
-	l, ok := b.live[saved(t, b).ID]
-	if !ok {
+// liveID - активное сообщение, пусто если его нет
+func liveID(b *Bot) string {
+	if b.active.MessageID == 0 {
 		return ""
 	}
-	return fmt.Sprint(l.messageID)
+	return fmt.Sprint(b.active.MessageID)
 }
 
 // inPlace - сообщение messageID обновлено на месте: ни новых, ни удалённых сообщений
@@ -288,7 +292,7 @@ func TestLiveMessage(t *testing.T) {
 	// /status становится живым, правка обновляет его на месте
 	b.onMessage(ctx, dm("/status"))
 	tg.take()
-	a := liveID(t, b)
+	a := liveID(b)
 	if calls := editTo("19.10\nРабота - 3ч"); !inPlace(calls, a, "3ч") {
 		t.Fatalf("/status was not updated by the edit: %+v", calls)
 	}
@@ -298,7 +302,7 @@ func TestLiveMessage(t *testing.T) {
 		t.Fatalf("new problem did not come as a new message: %+v", calls)
 	}
 	// Та же проблема при следующей правке - обновление на месте
-	c := liveID(t, b)
+	c := liveID(b)
 	if calls := editTo("19.10\nРабота - 4ч\n\n20.10"); !inPlace(calls, c, "4ч") {
 		t.Fatalf("unchanged problem was not updated in place: %+v", calls)
 	}
@@ -306,12 +310,12 @@ func TestLiveMessage(t *testing.T) {
 	if calls := editTo("19.10\nРабота\n\n20.10"); !replaced(calls, c, "ошибки") {
 		t.Fatalf("parse error did not come as a new message: %+v", calls)
 	}
-	e := liveID(t, b)
+	e := liveID(b)
 	if markup := lastParam(calls, "sendMessage", "reply_markup"); markup == "" {
 		t.Fatal("error message has no buttons")
 	}
 	// "Обновить" на нём пересчитывает его на месте, а исправление ставит туда статус
-	if calls := press(viewStatus, e); !inPlace(calls, e, "ошибки") || liveID(t, b) != e {
+	if calls := press(viewStatus, e); !inPlace(calls, e, "ошибки") || liveID(b) != e {
 		t.Fatalf("refresh of the error message: %+v", calls)
 	}
 	if calls := editTo("19.10\nРабота - 8ч"); !inPlace(calls, e, "Неделя") {
@@ -323,7 +327,7 @@ func TestLiveMessage(t *testing.T) {
 	if lastParam(calls, "deleteMessage", "message_id") != e {
 		t.Fatalf("previous live message not deleted: %+v", calls)
 	}
-	s := liveID(t, b)
+	s := liveID(b)
 	calls = editTo("19.10\nРабота - 6ч")
 	if !inPlace(calls, s, "6ч") || !strings.Contains(lastParam(calls, "editMessageText", "reply_markup"), submitPrefix) {
 		t.Fatalf("submit preview lost its mode: %+v", calls)
@@ -333,7 +337,7 @@ func TestLiveMessage(t *testing.T) {
 	tg.editsFail = true
 	tg.mu.Unlock()
 	editTo("19.10\nРабота - 5ч")
-	if liveID(t, b) != "" {
+	if liveID(b) != "" {
 		t.Fatal("deleted message is still live")
 	}
 	calls = editTo("19.10\nРабота")
@@ -346,7 +350,7 @@ func TestLiveMessage(t *testing.T) {
 	// "Скрыть" убирает сообщение, и бот его больше не трогает
 	b.onMessage(ctx, dm("/submit"))
 	tg.take()
-	press(hideData, liveID(t, b))
+	press(hideData, liveID(b))
 	if calls := editTo("19.10\nРабота - 8ч"); len(calls) != 0 {
 		t.Fatalf("hidden message was touched: %+v", calls)
 	}
@@ -438,16 +442,24 @@ func TestNextWeekPostAndLateFix(t *testing.T) {
 }
 
 func TestMissingCurrentWeekPost(t *testing.T) {
-	b, tg, _, _ := newTelegramBot(t)
+	b, tg, runner, st := newTelegramBot(t)
 	ctx := context.Background()
 	old := channelPost("23.10\nРабота - 8ч", day(10, 23))
 	b.onChannelPost(ctx, old, false)
-	b.clock = func() time.Time { return day(10, 26) }
-
 	b.onMessage(ctx, dm("/status"))
-	if text := lastParam(tg.take(), "sendMessage", "text"); text != noWeekPostText {
-		t.Fatalf("status = %q, want a missing current week post", text)
+	previousID := liveID(b)
+	tg.take()
+	// После перезапуска бот помнит старый предпросмотр
+	restarted, err := New(b.cfg, st, b.cal, runner, b.userID)
+	if err != nil {
+		t.Fatal(err)
 	}
+	b = restarted
+	b.clock = func() time.Time { return day(10, 26) }
+	tg.take()
+	tg.mu.Lock()
+	tg.deletesFail = true
+	tg.mu.Unlock()
 	if err := b.DailyReminder(ctx, b.today()); err != nil {
 		t.Fatal(err)
 	}
@@ -457,6 +469,18 @@ func TestMissingCurrentWeekPost(t *testing.T) {
 	}
 	if markup := lastParam(calls, "sendMessage", "reply_markup"); strings.Contains(markup, "https://t.me/") {
 		t.Fatalf("reminder links to a past week: %s", markup)
+	}
+	if lastParam(calls, "deleteMessage", "message_id") != previousID ||
+		lastParam(calls, "editMessageText", "message_id") != previousID ||
+		!strings.Contains(lastParam(calls, "editMessageText", "text"), "прошлый предпросмотр") ||
+		lastParam(calls, "editMessageText", "reply_markup") != `{"inline_keyboard":[]}` {
+		t.Fatalf("old preview was not compacted: %+v", calls)
+	}
+
+	waitingID := liveID(b)
+	b.onChannelPost(ctx, channelPost("26.10\nРабота - 8ч", day(10, 26)), false)
+	if calls := tg.take(); !inPlace(calls, waitingID, "Неделя 26.10") || liveID(b) != waitingID {
+		t.Fatalf("waiting message was not converted to the new preview: %+v", calls)
 	}
 }
 
@@ -563,6 +587,7 @@ func TestSecondSubmitReplacesPrompt(t *testing.T) {
 	b, tg, _, st := newTelegramBot(t)
 	ctx := context.Background()
 	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8ч", day(10, 19)), false)
+	b.onMessage(ctx, dm("/submit"))
 	saved, err := st.LatestWeekPost(ctx, b.userID)
 	if err != nil {
 		t.Fatal(err)
@@ -572,6 +597,7 @@ func TestSecondSubmitReplacesPrompt(t *testing.T) {
 
 	b.onCallback(ctx, &models.CallbackQuery{
 		ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: fmt.Sprintf("%s%d:%s:0", submitPrefix, saved.ID, hashText(saved.Text)),
+		Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: b.active.MessageID}},
 	})
 	calls := tg.take()
 	if lastParam(calls, "deleteMessage", "message_id") != "7" || b.pending == nil || b.pending.promptID == 7 {
@@ -694,8 +720,9 @@ func TestCommandMenu(t *testing.T) {
 		if c.Command != "help" && !strings.Contains(helpText, "/"+c.Command) {
 			t.Errorf("/%s is not in /help", c.Command)
 		}
-		b.onMessage(context.Background(), dm("/"+c.Command))
-		if countMethod(tg.take(), "deleteMessage") != 0 {
+		message := dm("/" + c.Command)
+		b.onMessage(context.Background(), message)
+		if lastParam(tg.take(), "deleteMessage", "message_id") == fmt.Sprint(message.ID) {
 			t.Errorf("/%s is deleted as unknown", c.Command)
 		}
 	}
@@ -714,21 +741,39 @@ func TestPreviewButtons(t *testing.T) {
 		t.Fatalf("/status has no way to submit: %+v", calls)
 	}
 
-	press := func(data string) []apiCall {
+	statusID := b.active.MessageID
+	press := func(data string, messageID int) []apiCall {
 		b.onCallback(ctx, &models.CallbackQuery{
 			ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: data,
-			Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: 55}},
+			Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: messageID}},
 		})
 		return tg.take()
 	}
 
-	calls = press(viewSubmit)
-	if countMethod(calls, "sendMessage") != 0 || lastParam(calls, "editMessageText", "message_id") != "55" ||
+	calls = press(viewSubmit, statusID)
+	if countMethod(calls, "sendMessage") != 0 || lastParam(calls, "editMessageText", "message_id") != fmt.Sprint(statusID) ||
 		!strings.Contains(lastParam(calls, "editMessageText", "reply_markup"), submitPrefix) {
 		t.Fatalf("submit view did not replace the message: %+v", calls)
 	}
 
-	calls = press(viewNew)
+	if err := b.WeeklyPreview(ctx); err != nil {
+		t.Fatal(err)
+	}
+	calls = tg.take()
+	fridayID := b.active.MessageID
+	if lastParam(calls, "deleteMessage", "message_id") != fmt.Sprint(statusID) || fridayID == statusID {
+		t.Fatalf("weekly preview did not replace the previous status: %+v", calls)
+	}
+	if calls := press(viewStatus, statusID); len(calls) != 1 ||
+		lastParam(calls, "answerCallbackQuery", "text") != "Предпросмотр устарел" || b.active.MessageID != fridayID {
+		t.Fatalf("stale refresh touched the weekly preview: %+v", calls)
+	}
+	if calls := press(viewSubmit, fridayID); !inPlace(calls, fmt.Sprint(fridayID), "Конец рабочей недели") ||
+		!strings.Contains(lastParam(calls, "editMessageText", "reply_markup"), submitPrefix) {
+		t.Fatalf("weekly preview lost its header or buttons on refresh: %+v", calls)
+	}
+
+	calls = press(viewNew, fridayID)
 	if countMethod(calls, "editMessageText") != 0 || countMethod(calls, "sendMessage") != 1 {
 		t.Fatalf("status button did not send a new preview: %+v", calls)
 	}
@@ -801,7 +846,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	}
 	b.onMessage(ctx, dm("/submit"))
 	tg.take()
-	live := fmt.Sprint(b.live[saved.ID].messageID)
+	live := liveID(b)
 
 	b.pending = &pendingSubmit{postID: saved.ID, hash: hashText(saved.Text), promptID: 7, expires: fixedClock().Add(time.Minute)}
 	b.onMessage(ctx, dm("Str0ng-Passphrase-XYZ"))

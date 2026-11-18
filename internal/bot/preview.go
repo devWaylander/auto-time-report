@@ -119,7 +119,7 @@ func (b *Bot) loadWeekOf(ctx context.Context, post store.WeekPost) (weekState, e
 
 // sendPreview присылает превью недели; submit - с кнопками отправки
 func (b *Bot) sendPreview(ctx context.Context, submit bool) {
-	if err := b.showPreview(ctx, submit, 0, ""); err != nil {
+	if err := b.showPreview(ctx, submit, ""); err != nil {
 		slog.Error("send preview", "error", err)
 	}
 }
@@ -475,13 +475,26 @@ func hashText(s string) string {
 
 // DailyReminder сообщает об отсутствии поста текущей недели или записей за сегодня
 func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
-	post, err := b.store.WeekPostForWeek(ctx, b.userID, calendar.WeekStart(date))
+	b.postMu.Lock()
+	defer b.postMu.Unlock()
+	if !sameDay(date, b.today()) {
+		return nil
+	}
+	week := calendar.WeekStart(date)
+	post, err := b.store.WeekPostForWeek(ctx, b.userID, week)
 	if errors.Is(err, store.ErrNotFound) {
-		_, err := b.send(ctx, "📝 "+noWeekPostText, previewKeyboard(previewKeys{}))
-		return err
+		if b.active.WeekStart.Format(time.DateOnly) == week.Format(time.DateOnly) && b.active.Header != "" {
+			return nil
+		}
+		view := weekView{text: "📝 " + noWeekPostText, markup: previewKeyboard(previewKeys{})}
+		return b.showActive(ctx, view, store.ActiveWeekView{WeekStart: week})
 	}
 	if err != nil {
 		return err
+	}
+	// Пост мог прийти после проверки в планировщике
+	if report, parseErr := parser.Parse(post.Text, b.cfg.DefaultIssue, date); parseErr == nil && report.DayTotal(date) > 0 {
+		return nil
 	}
 	_, err = b.send(ctx, fmt.Sprintf("📝 В посте недели отсутствуют записи за сегодня (%s %s)",
 		strings.ToLower(weekdays[date.Weekday()]), date.Format("02.01")), statusKeyboard(postURL(post.ChatID, post.MessageID)))
@@ -490,5 +503,5 @@ func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
 
 // WeeklyPreview - напоминание notify: превью недели с кнопками
 func (b *Bot) WeeklyPreview(ctx context.Context) error {
-	return b.showPreview(ctx, true, 0, "🗓 Конец рабочей недели, подготовлен предпросмотр перед отправкой")
+	return b.showPreview(ctx, true, "🗓 Конец рабочей недели, подготовлен предпросмотр перед отправкой")
 }
