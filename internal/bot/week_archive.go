@@ -174,7 +174,7 @@ func (b *Bot) sendWeekArchive(ctx context.Context, msg *models.Message, id strin
 	}
 	row := append(postButton(postURL(b.cfg.ChannelID, archive.ChannelMessageID)),
 		models.InlineKeyboardButton{Text: "✖️ Скрыть", CallbackData: hideData})
-	card, err := b.send(ctx, archive.Text, models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}})
+	card, err := b.send(ctx, formatWeekArchive(archive.Text), models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}})
 	if err != nil {
 		slog.Error("send week archive", "error", err)
 		return
@@ -190,4 +190,17 @@ func (b *Bot) sendWeekArchive(ctx context.Context, msg *models.Message, id strin
 	if err := b.deleteMessage(ctx, msg.Chat.ID, msg.ID); err != nil {
 		slog.Warn("delete archive command", "error", err)
 	}
+}
+
+// formatWeekArchive обновляет разметку итогов, сохранённых со старым блоком дней
+func formatWeekArchive(text string) string {
+	header, rest, ok := strings.Cut(text, "<pre>")
+	if !ok {
+		return text
+	}
+	days, summary, ok := strings.Cut(rest, "</pre>")
+	if !ok {
+		return text
+	}
+	return header + weekDaysOpen + strings.Trim(days, "\r\n") + weekDaysClose + summary
 }

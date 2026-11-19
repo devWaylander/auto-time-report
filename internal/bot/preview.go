@@ -329,6 +329,12 @@ func (b *Bot) onVacation(ctx context.Context, d time.Time) bool {
 
 var weekdays = [...]string{"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"}
 
+// Моноширинная цитата сохраняет колонки в мобильных и веб-клиентах
+const (
+	weekDaysOpen  = "<blockquote><code>"
+	weekDaysClose = "</code></blockquote>"
+)
+
 func renderPreview(in previewInput) string {
 	var b strings.Builder
 	first, last := in.Days[0].Date, in.Days[len(in.Days)-1].Date
@@ -340,14 +346,14 @@ func renderPreview(in previewInput) string {
 		if d.Total > 0 {
 			totals[i] = parser.FormatDuration(d.Total)
 		}
-		if d.shortfall() > 0 {
-			totals[i] += " из " + parser.FormatDuration(d.Kind.Norm())
-		}
 		width = max(width, utf8.RuneCountInString(totals[i]))
 	}
 
-	b.WriteString("<pre>")
+	b.WriteString(weekDaysOpen)
 	for i, d := range in.Days {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
 		// Значок после даты и часов: ширина эмодзи не сдвигает колонки
 		mark := "▫️"
 		switch {
@@ -364,6 +370,9 @@ func renderPreview(in previewInput) string {
 			mark = "🔹"
 		}
 		var notes []string
+		if d.shortfall() > 0 {
+			notes = append(notes, "норма "+parser.FormatDuration(d.Kind.Norm()))
+		}
 		switch {
 		case d.Kind == calendar.Off && d.Total > 0:
 			notes = append(notes, "выходной")
@@ -379,17 +388,16 @@ func renderPreview(in previewInput) string {
 		if d.Date.Equal(in.Today) {
 			notes = append(notes, "сегодня")
 		}
-		fmt.Fprintf(&b, "%s %s  %-*s  %s", weekdays[d.Date.Weekday()], d.Date.Format("02.01"), width, totals[i], mark)
+		fmt.Fprintf(&b, "%s %s %-*s %s", weekdays[d.Date.Weekday()], d.Date.Format("02.01"), width, totals[i], mark)
 		if len(notes) > 0 {
 			b.WriteByte(' ')
 			b.WriteString(strings.Join(notes, " · "))
 		}
-		b.WriteByte('\n')
 		if len(d.Issues) > 0 {
-			fmt.Fprintf(&b, "    %s\n", html.EscapeString(strings.Join(d.Issues, ", ")))
+			fmt.Fprintf(&b, "\n    %s", html.EscapeString(strings.Join(d.Issues, ", ")))
 		}
 	}
-	b.WriteString("</pre>\n")
+	b.WriteString(weekDaysClose + "\n")
 
 	fmt.Fprintf(&b, "<b>Итого: %s</b> из %s по норме", parser.FormatDuration(in.Total), parser.FormatDuration(in.Norm))
 	switch {

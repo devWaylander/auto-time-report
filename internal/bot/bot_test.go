@@ -178,13 +178,12 @@ func TestPreviewInputAndRender(t *testing.T) {
 		t.Errorf("today is marked %d times:\n%s", n, text)
 	}
 	for _, want := range []string{
-		"<b>Неделя 19.10-23.10.2026</b>\n<pre>",
-		"Пн 19.10  8ч  ☑️\n",
-		"Вт 20.10  8ч  🔹\n",
-		"Ср 21.10      ▫️\n",
+		"<b>Неделя 19.10-23.10.2026</b>\n<blockquote><code>",
+		"Пн 19.10 8ч ☑️\n",
+		"Вт 20.10 8ч 🔹\n",
+		"Ср 21.10    ▫️\n",
 		"ABC-1 6ч, ABC-2 2ч",
-		"Пт 23.10      ▫️ сокращённый · сегодня",
-		"</pre>\n<b>Итого: 16ч</b> из 39ч по норме (не хватает 23ч)",
+		"Пт 23.10    ▫️ сокращённый · сегодня</code></blockquote>\n<b>Итого: 16ч</b> из 39ч по норме (не хватает 23ч)",
 		"К записи в Jira: 2",
 	} {
 		if !strings.Contains(text, want) {
@@ -255,11 +254,11 @@ func TestRenderShortfall(t *testing.T) {
 		Pending: 1,
 	})
 	for _, want := range []string{
-		"Пн 19.10  8ч            🔹\n",
-		"Вт 20.10  6ч из 8ч      🔹\n",
-		"Ср 21.10  2ч            🔹\n",
-		"Пт 23.10  6ч 30м из 7ч  🔹 сокращённый",
-		"Сб 24.10  2ч            🔹 выходной",
+		"Пн 19.10 8ч     🔹\n",
+		"Вт 20.10 6ч     🔹 норма 8ч\n",
+		"Ср 21.10 2ч     🔹\n",
+		"Пт 23.10 6ч 30м 🔹 норма 7ч · сокращённый",
+		"Сб 24.10 2ч     🔹 выходной",
 		"⚠️ Недобор: Вт-2ч, Пт-30м\n",
 	} {
 		if !strings.Contains(text, want) {
@@ -472,9 +471,9 @@ func TestPreviewShowsJiraMismatch(t *testing.T) {
 	}
 	text, _ := b.buildPreview(ctx, false)
 	for _, want := range []string{
-		"Пн 19.10  8ч        ☑️\n",
-		"Вт 20.10  7ч из 8ч  ⚠️ в Jira 8ч\n",
-		"Ср 21.10            ⚠️ в Jira 8ч\n",
+		"Пн 19.10 8ч ☑️\n",
+		"Вт 20.10 7ч ⚠️ норма 8ч · в Jira 8ч\n",
+		"Ср 21.10    ⚠️ в Jira 8ч\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("preview has no %q:\n%s", want, text)
@@ -500,7 +499,7 @@ func TestRenderTodayPencil(t *testing.T) {
 		{Date: day(10, 21), Kind: calendar.Working, Total: 8 * time.Hour, Worklogs: 1},
 		{Date: day(10, 22), Kind: calendar.Working},
 	}})
-	for _, want := range []string{"Вт 20.10  8ч  🔹\n", "Ср 21.10  8ч  ✏️ сегодня\n", "Чт 22.10      ▫️\n"} {
+	for _, want := range []string{"Вт 20.10 8ч 🔹\n", "Ср 21.10 8ч ✏️ сегодня\n", "Чт 22.10    ▫️</code>"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("preview has no %q:\n%s", want, text)
 		}
@@ -523,7 +522,7 @@ func TestPreviewPartialDay(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, _ := b.buildPreview(ctx, false)
-	for _, want := range []string{"Вт 20.10  8ч  🔸\n", "ABC-1 6ч, XYZ-101 2ч", "К записи в Jira: 1"} {
+	for _, want := range []string{"Вт 20.10 8ч 🔸\n", "ABC-1 6ч, XYZ-101 2ч", "К записи в Jira: 1"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("preview has no %q:\n%s", want, text)
 		}

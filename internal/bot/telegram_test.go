@@ -963,7 +963,7 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 
 	b.onMessage(ctx, dm("/status"))
 	preview := strings.Join(tg.sent(tg.take()), "\n")
-	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "Пн 19.10  8ч  ⚠️ вручную · в Jira 6ч") {
+	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "Пн 19.10 8ч ⚠️ вручную · в Jira 6ч") {
 		t.Fatalf("manual day is not counted as written or its mismatch is hidden:\n%s", preview)
 	}
 
@@ -998,7 +998,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	b.onMessage(ctx, dm("Str0ng-Passphrase-XYZ"))
 	calls := tg.take()
 	// После отправки живой предпросмотр показывает свежее состояние на месте
-	if lastParam(calls, "editMessageText", "message_id") != live || !strings.Contains(lastParam(calls, "editMessageText", "text"), "Вт 20.10  8ч  ☑️") {
+	if lastParam(calls, "editMessageText", "message_id") != live || !strings.Contains(lastParam(calls, "editMessageText", "text"), "Вт 20.10 8ч ☑️") {
 		t.Fatalf("live preview not refreshed after submit: %+v", calls)
 	}
 	if len(runner.jobs) != 1 {
@@ -1010,7 +1010,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	}
 
 	b.onMessage(ctx, dm("/status"))
-	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "Вт 20.10  8ч  ☑️") || strings.Contains(preview, "К записи") {
+	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "Вт 20.10 8ч ☑️") || strings.Contains(preview, "К записи") {
 		t.Fatalf("day is not fully written after submit:\n%s", preview)
 	}
 }
@@ -1197,7 +1197,7 @@ func TestWeekArchiveButtonLifecycle(t *testing.T) {
 func TestWeekArchiveReplacesPreviousCard(t *testing.T) {
 	b, tg, runner, st := newTelegramBot(t)
 	ctx := context.Background()
-	saveArchive := func(messageID int64) string {
+	saveArchive := func(messageID int64, archiveText string) string {
 		t.Helper()
 		post, _, err := st.SaveWeekPost(ctx, store.WeekPost{
 			UserID: b.userID, ChatID: b.cfg.ChannelID, MessageID: messageID, PostedAt: day(10, 12),
@@ -1205,29 +1205,33 @@ func TestWeekArchiveReplacesPreviousCard(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := st.SaveWeekArchive(ctx, post.ID, "Сохранённый итог недели"); err != nil {
+		if err := st.SaveWeekArchive(ctx, post.ID, archiveText); err != nil {
 			t.Fatal(err)
 		}
 		return archiveStartPrefix + strconv.FormatInt(post.ID, 10)
 	}
-	first, other := saveArchive(42), saveArchive(43)
+	const savedText = "<b>Неделя 12.10-16.10.2026</b>\n<pre>Пн 12.10  8ч  ☑️ вручную\nВт 13.10  8ч  ☑️\n</pre>\n<b>Итого: 16ч</b>"
+	const displayedText = "<b>Неделя 12.10-16.10.2026</b>\n<blockquote><code>Пн 12.10  8ч  ☑️ вручную\nВт 13.10  8ч  ☑️</code></blockquote>\n<b>Итого: 16ч</b>"
+	first, other := saveArchive(42, savedText), saveArchive(43, displayedText)
 	b.onMessage(ctx, dm("/status"))
 	active := liveID(b)
 	tg.take()
 
 	b.onMessage(ctx, dm("/start "+first))
-	tg.take()
+	if got := lastParam(tg.take(), "sendMessage", "text"); got != displayedText {
+		t.Fatalf("old archive was not reformatted:\n%s", got)
+	}
 	post, err := st.WeekPostByMessage(ctx, b.cfg.ChannelID, 42)
 	if err != nil {
 		t.Fatal(err)
 	}
 	old, err := st.WeekArchive(ctx, b.userID, b.cfg.ChannelID, post.ID)
-	if err != nil || old.MessageID == 0 {
+	if err != nil || old.MessageID == 0 || old.Text != savedText {
 		t.Fatalf("archive card was not saved: %+v, %v", old, err)
 	}
 	b.onMessage(ctx, dm("/start "+other))
-	if calls := tg.take(); countMethod(calls, "deleteMessage") != 1 {
-		t.Fatalf("opening another archive touched the previous card: %+v", calls)
+	if calls := tg.take(); countMethod(calls, "deleteMessage") != 1 || lastParam(calls, "sendMessage", "text") != displayedText {
+		t.Fatalf("opening another archive changed the formatting or touched the previous card: %+v", calls)
 	}
 
 	restarted, err := New(b.cfg, st, b.cal, runner, b.userID)
