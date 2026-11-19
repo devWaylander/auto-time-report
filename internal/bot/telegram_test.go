@@ -56,15 +56,16 @@ type fakeTelegram struct {
 	sendsFail bool
 	// Кнопку под постом канала повесить нельзя: у бота нет права редактировать сообщения
 	markupFails bool
+	// Telegram отклоняет отправку HTML-виджета
+	widgetDenied bool
 }
 
 func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 	params := map[string]string{}
-	if err := r.ParseMultipartForm(1 << 20); err == nil {
-		for k, v := range r.MultipartForm.Value {
-			params[k] = v[0]
-		}
+	_ = r.ParseMultipartForm(1 << 20)
+	for k, v := range r.PostForm {
+		params[k] = v[0]
 	}
 
 	f.mu.Lock()
@@ -73,6 +74,7 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := f.nextID
 	chatInfo := f.chatInfo
 	editsFail, deletesFail, sendsFail, markupFails := f.editsFail, f.deletesFail, f.sendsFail, f.markupFails
+	widgetDenied := f.widgetDenied
 	f.mu.Unlock()
 
 	if markupFails && method == "editMessageReplyMarkup" {
@@ -92,6 +94,11 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 500, "description": "Internal Server Error"})
 		return
 	}
+	if widgetDenied && method == "sendWidget" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: INPUT_MEDIA_WIDGET_NOT_ALLOWED"})
+		return
+	}
 
 	var result any = true
 	switch method {
@@ -99,7 +106,7 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result = map[string]any{"id": 1, "is_bot": true, "first_name": "bot", "username": "bot"}
 	case "getChat":
 		result = chatInfo
-	case "sendMessage", "sendRichMessage", "editMessageText", "editMessageReplyMarkup":
+	case "sendMessage", "sendRichMessage", "sendWidget", "editMessageText", "editMessageReplyMarkup":
 		result = map[string]any{"message_id": 1000 + id, "date": 0, "chat": map[string]any{"id": 42, "type": "private"}}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": result})
@@ -761,6 +768,34 @@ func TestStrayTextAndUnknownCommandsAreDeleted(t *testing.T) {
 		if countMethod(tg.take(), "deleteMessage") != 1 {
 			t.Errorf("%q was not deleted", text)
 		}
+	}
+}
+
+func TestWidgetProbe(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	ctx := context.Background()
+	pending := &pendingSubmit{promptID: 7, expires: fixedClock().Add(-time.Minute)}
+	b.pending = pending
+	cmd := dm("/widgettest")
+	b.onMessage(ctx, cmd)
+	calls := tg.take()
+	if len(calls) != 2 || calls[0].method != "sendWidget" || calls[1].method != "deleteMessage" {
+		t.Fatalf("widget probe calls = %+v", calls)
+	}
+	if calls[0].params["chat_id"] != strconv.FormatInt(b.cfg.OwnerID, 10) || calls[0].params["html"] != widgetProbeHTML {
+		t.Fatalf("widget probe params = %+v", calls[0].params)
+	}
+	if b.pending != pending {
+		t.Fatal("widget command consumed pending passphrase request")
+	}
+
+	tg.mu.Lock()
+	tg.widgetDenied = true
+	tg.mu.Unlock()
+	b.onMessage(ctx, dm("/widgettest"))
+	calls = tg.take()
+	if countMethod(calls, "sendWidget") != 1 || !strings.Contains(lastParam(calls, "sendMessage", "text"), "400 Bad Request: INPUT_MEDIA_WIDGET_NOT_ALLOWED") {
+		t.Fatalf("widget error was not reported: %+v", calls)
 	}
 }
 

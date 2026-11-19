@@ -54,13 +54,14 @@ const (
 
 type Bot struct {
 	// clock подменяется в тестах
-	clock  func() time.Time
-	api    *tgbot.Bot
-	cfg    Config
-	store  *store.Store
-	cal    Calendar
-	runner Runner
-	userID int64
+	clock      func() time.Time
+	api        *tgbot.Bot
+	httpClient *http.Client
+	cfg        Config
+	store      *store.Store
+	cal        Calendar
+	runner     Runner
+	userID     int64
 
 	// Апдейты канала обрабатываются по одному
 	postMu sync.Mutex
@@ -87,10 +88,12 @@ func New(cfg Config, st *store.Store, cal Calendar, runner Runner, userID int64)
 	if err != nil {
 		return nil, err
 	}
-	b := &Bot{clock: time.Now, cfg: cfg, store: st, cal: cal, runner: runner, userID: userID, active: active}
+	client := &http.Client{Timeout: time.Minute}
+	b := &Bot{clock: time.Now, httpClient: client, cfg: cfg, store: st, cal: cal, runner: runner, userID: userID, active: active}
 	opts := []tgbot.Option{
 		tgbot.WithDefaultHandler(b.handle),
 		tgbot.WithErrorsHandler(b.onError),
+		tgbot.WithHTTPClient(time.Minute, client),
 		tgbot.WithAllowedUpdates(tgbot.AllowedUpdates{
 			"message", "channel_post", "edited_channel_post", "callback_query",
 		}),
@@ -105,8 +108,7 @@ func New(cfg Config, st *store.Store, cal Calendar, runner Runner, userID int64)
 		}
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = http.ProxyURL(proxy)
-		// Таймауты как у клиента библиотеки по умолчанию: long polling держит запрос до минуты
-		opts = append(opts, tgbot.WithHTTPClient(time.Minute, &http.Client{Timeout: time.Minute, Transport: tr}))
+		client.Transport = tr
 	}
 	api, err := tgbot.New(cfg.Token.Reveal(), opts...)
 	if err != nil {
@@ -599,6 +601,10 @@ func (b *Bot) onMessage(ctx context.Context, msg *models.Message) {
 	args = strings.TrimSpace(args)
 	if id, archive := strings.CutPrefix(args, archiveStartPrefix); cmd == "/start" && archive {
 		b.sendWeekArchive(ctx, msg, id)
+		return
+	}
+	if cmd == "/widgettest" && args == "" {
+		b.testWidget(ctx, msg)
 		return
 	}
 	if b.takePassphrase(ctx, msg) {
