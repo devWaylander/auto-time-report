@@ -799,6 +799,33 @@ func TestWidgetProbe(t *testing.T) {
 	}
 }
 
+func TestTableSampleKeepsLivePreview(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	ctx := context.Background()
+	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8ч", day(10, 19)), false)
+	tg.take()
+	b.onMessage(ctx, dm("/status"))
+	quoted := lastParam(tg.take(), "sendRichMessage", "text")
+	if !strings.Contains(quoted, "<blockquote><table compact>") {
+		t.Fatalf("status is missing its quote: %s", quoted)
+	}
+	active := liveID(b)
+	pending := &pendingSubmit{promptID: 7, expires: fixedClock().Add(-time.Minute)}
+	b.pending = pending
+	command := dm("/tabletest")
+	b.onMessage(ctx, command)
+	calls := tg.take()
+	want := strings.NewReplacer("<blockquote>", "", "</blockquote>", "").Replace(quoted)
+	if got := lastParam(calls, "sendRichMessage", "text"); got != want {
+		t.Fatalf("table sample = %s, want %s", got, want)
+	}
+	if len(calls) != 2 || calls[0].method != "sendRichMessage" ||
+		lastParam(calls, "deleteMessage", "message_id") != strconv.Itoa(command.ID) ||
+		liveID(b) != active || b.pending != pending {
+		t.Fatalf("table sample changed the active preview or pending request: %+v", calls)
+	}
+}
+
 func TestStrangersAreIgnored(t *testing.T) {
 	b, tg, runner, _ := newTelegramBot(t)
 	ctx := context.Background()

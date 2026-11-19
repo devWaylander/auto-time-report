@@ -144,6 +144,32 @@ func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.Rep
 	return v.text, v.markup
 }
 
+// sendTableSample показывает текущую неделю без цитаты отдельным сообщением
+func (b *Bot) sendTableSample(ctx context.Context, msg *models.Message) {
+	text, _ := b.buildPreview(ctx, false)
+	rich := weekTableMessage(text)
+	if rich == nil {
+		b.notify(ctx, text)
+		return
+	}
+	rich.HTML = strings.Replace(rich.HTML, weekDaysOpen, "<table compact>", 1)
+	rich.HTML = strings.Replace(rich.HTML, weekDaysClose, "</table>", 1)
+	_, err := b.api.SendRichMessage(ctx, &tgbot.SendRichMessageParams{
+		ChatID: b.cfg.OwnerID, RichMessage: *rich,
+		ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+			{{Text: "✖️ Скрыть", CallbackData: hideData}},
+		}},
+	})
+	if err != nil {
+		slog.Error("send table sample", "error", b.redact(err.Error()))
+		b.notify(ctx, "⚠️ Ошибка отправки тестовой таблицы")
+		return
+	}
+	if err := b.deleteMessage(ctx, msg.Chat.ID, msg.ID); err != nil {
+		slog.Warn("delete table test command", "error", err)
+	}
+}
+
 // weekView - сообщение о посте: превью с предупреждениями под ним или ошибки разбора
 type weekView struct {
 	text         string

@@ -607,6 +607,10 @@ func (b *Bot) onMessage(ctx context.Context, msg *models.Message) {
 		b.testWidget(ctx, msg)
 		return
 	}
+	if cmd == "/tabletest" && args == "" {
+		b.sendTableSample(ctx, msg)
+		return
+	}
 	if b.takePassphrase(ctx, msg) {
 		return
 	}
