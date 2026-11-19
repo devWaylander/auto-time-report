@@ -647,9 +647,39 @@ func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
 	if report, parseErr := parser.Parse(post.Text, b.cfg.DefaultIssue, date); parseErr == nil && report.DayTotal(date) > 0 {
 		return nil
 	}
-	_, err = b.send(ctx, fmt.Sprintf("📝 В посте недели отсутствуют записи за сегодня (%s %s)",
+	message, err := b.send(ctx, fmt.Sprintf("📝 В посте недели отсутствуют записи за сегодня (%s %s)",
 		strings.ToLower(weekdays[date.Weekday()]), date.Format("02.01")), statusKeyboard(postURL(post.ChatID, post.MessageID)))
-	return err
+	if err != nil {
+		return err
+	}
+	if err := b.store.SaveDailyReminderMessage(context.WithoutCancel(ctx), b.userID, date, message.ID); err != nil {
+		if b.retireMessage(ctx, message.ID, "Напоминание будет отправлено повторно") {
+			return err
+		}
+		slog.Error("save daily reminder message", "error", err)
+	}
+	return nil
+}
+
+// removeResolvedDailyReminders убирает напоминания за заполненные даты, вызывать под postMu
+func (b *Bot) removeResolvedDailyReminders(ctx context.Context, report parser.Report, week time.Time) {
+	reminders, err := b.store.DailyReminderMessages(ctx, b.userID, week, week.AddDate(0, 0, 6))
+	if err != nil {
+		slog.Warn("load daily reminder messages", "error", err)
+		return
+	}
+	for _, reminder := range reminders {
+		date := time.Date(reminder.Date.Year(), reminder.Date.Month(), reminder.Date.Day(), 0, 0, 0, 0, b.cfg.Location)
+		if report.DayTotal(date) == 0 {
+			continue
+		}
+		if !b.retireMessage(ctx, reminder.MessageID, "Записи за "+date.Format("02.01")+" добавлены") {
+			continue
+		}
+		if err := b.store.ClearDailyReminderMessage(context.WithoutCancel(ctx), b.userID, reminder); err != nil {
+			slog.Warn("forget daily reminder message", "error", err)
+		}
+	}
 }
 
 // WeeklyPreview - напоминание notify: превью недели с кнопками

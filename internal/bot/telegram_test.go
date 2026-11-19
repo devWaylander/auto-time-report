@@ -554,6 +554,57 @@ func TestDateStartsNewWeekPost(t *testing.T) {
 	}
 }
 
+func TestDailyReminderRemovedWhenDateIsFilled(t *testing.T) {
+	b, tg, runner, st := newTelegramBot(t)
+	ctx := context.Background()
+	b.clock = func() time.Time { return day(11, 18) }
+	week := channelPost("16.11\nРабота - 8ч", day(11, 16))
+	b.onChannelPost(ctx, week, false)
+	tg.take()
+
+	target := b.today()
+	notifier := notify.New(st, b.cal, b, b.cfg.Location, b.userID, b.cfg.DefaultIssue)
+	if err := notifier.Tick(ctx, target.Add(20*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if calls := tg.take(); !strings.Contains(lastParam(calls, "sendMessage", "text"), "ср 18.11") {
+		t.Fatalf("daily reminder was not sent: %+v", calls)
+	}
+	reminders, err := st.DailyReminderMessages(ctx, b.userID, target, target)
+	if err != nil || len(reminders) != 1 {
+		t.Fatalf("daily reminder was not recorded: %+v, %v", reminders, err)
+	}
+	reminderID := strconv.Itoa(reminders[0].MessageID)
+	b.onMessage(ctx, dm("/status"))
+	active := liveID(b)
+	tg.take()
+
+	b, err = New(b.cfg, st, b.cal, runner, b.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.clock = func() time.Time { return day(11, 19) }
+	tg.take()
+	otherDay := week.Text + "\n17.11\nРабота - 8ч"
+	b.onChannelPost(ctx, edit(week, otherDay, day(11, 19)), true)
+	if calls := tg.take(); countMethod(calls, "deleteMessage") != 0 || !inPlace(calls, active, "Итого: 16ч") {
+		t.Fatalf("editing another day changed the reminder: %+v", calls)
+	}
+	corrected := otherDay + "\n18.11\nРабота - 8ч"
+	b.onChannelPost(ctx, edit(week, corrected, day(11, 19).Add(time.Minute)), true)
+	if calls := tg.take(); lastParam(calls, "deleteMessage", "message_id") != reminderID ||
+		countMethod(calls, "deleteMessage") != 1 || lastParam(calls, "editMessageText", "message_id") != active ||
+		!strings.Contains(lastParam(calls, "editMessageText", "text"), "Итого: 24ч") {
+		t.Fatalf("fix did not remove the reminder and update the preview: %+v", calls)
+	}
+	if reminders, err := st.DailyReminderMessages(ctx, b.userID, target, target); err != nil || len(reminders) != 0 {
+		t.Fatalf("removed reminder is still tracked: %+v, %v", reminders, err)
+	}
+	if claimed, err := st.ClaimNotification(ctx, b.userID, store.NotificationDaily, target); err != nil || claimed {
+		t.Fatalf("reminder could be sent again: %v, %v", claimed, err)
+	}
+}
+
 func TestMissingCurrentWeekPost(t *testing.T) {
 	b, tg, runner, st := newTelegramBot(t)
 	ctx := context.Background()

@@ -41,3 +41,56 @@ func (s *Store) ReleaseNotification(ctx context.Context, userID int64, kind Noti
 	}
 	return nil
 }
+
+type DailyReminderMessage struct {
+	Date      time.Time
+	MessageID int
+}
+
+func (s *Store) SaveDailyReminderMessage(ctx context.Context, userID int64, date time.Time, messageID int) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO notifications (user_id, kind, target_date, message_id) VALUES (?, 'daily', ?, ?)
+		ON CONFLICT (user_id, kind, target_date) DO UPDATE SET message_id = excluded.message_id`,
+		userID, formatDate(date), messageID)
+	if err != nil {
+		return fmt.Errorf("save daily reminder message: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DailyReminderMessages(ctx context.Context, userID int64, from, to time.Time) ([]DailyReminderMessage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT target_date, message_id FROM notifications
+		WHERE user_id = ? AND kind = 'daily' AND target_date BETWEEN ? AND ? AND message_id IS NOT NULL`,
+		userID, formatDate(from), formatDate(to))
+	if err != nil {
+		return nil, fmt.Errorf("load daily reminder messages: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var reminders []DailyReminderMessage
+	for rows.Next() {
+		var reminder DailyReminderMessage
+		var date string
+		if err := rows.Scan(&date, &reminder.MessageID); err != nil {
+			return nil, fmt.Errorf("scan daily reminder message: %w", err)
+		}
+		reminder.Date, err = parseDate(date)
+		if err != nil {
+			return nil, err
+		}
+		reminders = append(reminders, reminder)
+	}
+	return reminders, rows.Err()
+}
+
+// ClearDailyReminderMessage забывает ID сообщения, сохраняя отметку об отправке
+func (s *Store) ClearDailyReminderMessage(ctx context.Context, userID int64, reminder DailyReminderMessage) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE notifications SET message_id = NULL
+		WHERE user_id = ? AND kind = 'daily' AND target_date = ? AND message_id = ?`,
+		userID, formatDate(reminder.Date), reminder.MessageID)
+	if err != nil {
+		return fmt.Errorf("forget daily reminder message: %w", err)
+	}
+	return nil
+}

@@ -353,6 +353,9 @@ func (b *Bot) showPreview(ctx context.Context, submit bool, header string) error
 func (b *Bot) showPreviewLocked(ctx context.Context, submit bool, messageID int, header string) error {
 	week := calendar.WeekStart(b.now())
 	w, err := b.loadWeek(ctx)
+	if err == nil {
+		b.removeResolvedDailyReminders(ctx, w.report, week)
+	}
 	v := b.viewOf(ctx, w, err, submit, header)
 	b.syncWeekArchive(ctx, w.post, v, nil)
 	if v.live || errors.Is(err, errNoPost) {
@@ -399,14 +402,16 @@ func (b *Bot) retireActive(ctx context.Context, old, next store.ActiveWeekView) 
 }
 
 // retireMessage удаляет старое сообщение или сворачивает его до одной строки без кнопок
-func (b *Bot) retireMessage(ctx context.Context, messageID int, text string) {
+func (b *Bot) retireMessage(ctx context.Context, messageID int, text string) bool {
 	if err := b.deleteMessage(ctx, b.cfg.OwnerID, messageID); err == nil || strings.Contains(err.Error(), "message to delete not found") {
-		return
+		return true
 	}
 	noButtons := models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
 	if err := b.editMessage(ctx, messageID, text, noButtons); err != nil {
 		slog.Warn("retire message", "error", err)
+		return false
 	}
+	return true
 }
 
 func (b *Bot) clearActive(ctx context.Context) {
@@ -420,6 +425,9 @@ func (b *Bot) clearActive(ctx context.Context) {
 func (b *Bot) onPostChanged(ctx context.Context, post store.WeekPost, msg *models.Message) {
 	w, err := b.loadWeekOf(ctx, post)
 	next := store.ActiveWeekView{PostID: post.ID, WeekStart: calendar.WeekStart(b.now())}
+	if err == nil {
+		b.removeResolvedDailyReminders(ctx, w.report, next.WeekStart)
+	}
 	active := b.active
 	sameWeek := active.WeekStart.Format(time.DateOnly) == next.WeekStart.Format(time.DateOnly)
 	if sameWeek {
