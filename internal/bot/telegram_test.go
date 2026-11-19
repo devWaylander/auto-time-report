@@ -28,6 +28,20 @@ type apiCall struct {
 	params map[string]string
 }
 
+func (c apiCall) text() string {
+	if raw := c.params["rich_message"]; raw != "" {
+		var rich models.InputRichMessage
+		if err := json.Unmarshal([]byte(raw), &rich); err == nil {
+			return rich.HTML
+		}
+	}
+	return c.params["text"]
+}
+
+func isMessageSend(method string) bool {
+	return method == "sendMessage" || method == "sendRichMessage"
+}
+
 // fakeTelegram записывает вызовы Bot API и отвечает успехом
 type fakeTelegram struct {
 	mu       sync.Mutex
@@ -74,7 +88,7 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message can't be deleted"})
 		return
 	}
-	if sendsFail && method == "sendMessage" {
+	if sendsFail && isMessageSend(method) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 500, "description": "Internal Server Error"})
 		return
 	}
@@ -85,7 +99,7 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result = map[string]any{"id": 1, "is_bot": true, "first_name": "bot", "username": "bot"}
 	case "getChat":
 		result = chatInfo
-	case "sendMessage", "editMessageText", "editMessageReplyMarkup":
+	case "sendMessage", "sendRichMessage", "editMessageText", "editMessageReplyMarkup":
 		result = map[string]any{"message_id": 1000 + id, "date": 0, "chat": map[string]any{"id": 42, "type": "private"}}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": result})
@@ -102,8 +116,8 @@ func (f *fakeTelegram) take() []apiCall {
 func (f *fakeTelegram) sent(calls []apiCall) []string {
 	var texts []string
 	for _, c := range calls {
-		if c.method == "sendMessage" || c.method == "editMessageText" {
-			texts = append(texts, c.params["text"])
+		if isMessageSend(c.method) || c.method == "editMessageText" {
+			texts = append(texts, c.text())
 		}
 	}
 	return texts
@@ -263,15 +277,15 @@ func liveID(b *Bot) string {
 
 // inPlace - сообщение messageID обновлено на месте: ни новых, ни удалённых сообщений
 func inPlace(calls []apiCall, messageID, want string) bool {
-	return countMethod(calls, "sendMessage") == 0 && countMethod(calls, "deleteMessage") == 0 &&
+	return countMethod(calls, "sendMessage") == 0 && countMethod(calls, "sendRichMessage") == 0 && countMethod(calls, "deleteMessage") == 0 &&
 		lastParam(calls, "editMessageText", "message_id") == messageID &&
 		strings.Contains(lastParam(calls, "editMessageText", "text"), want)
 }
 
 // replaced - старое живое сообщение удалено, внизу новое с want
 func replaced(calls []apiCall, old, want string) bool {
-	return lastParam(calls, "deleteMessage", "message_id") == old && countMethod(calls, "sendMessage") == 1 &&
-		strings.Contains(lastParam(calls, "sendMessage", "text"), want)
+	return lastParam(calls, "deleteMessage", "message_id") == old && countMethod(calls, "sendMessage")+countMethod(calls, "sendRichMessage") == 1 &&
+		strings.Contains(lastParam(calls, "sendMessage", "text")+lastParam(calls, "sendRichMessage", "text"), want)
 }
 
 // У поста одно живое сообщение: последнее, что бот о нём показал. Правки обновляют его на месте, новая
@@ -308,7 +322,7 @@ func TestLiveMessage(t *testing.T) {
 	}
 	// Новая проблема - внизу новое сообщение со статусом и предупреждением, старое удалено
 	calls := editTo("19.10\nРабота - 3ч\n\n20.10")
-	if !replaced(calls, a, "20.10: дата есть") || !strings.Contains(lastParam(calls, "sendMessage", "text"), "Неделя") {
+	if !replaced(calls, a, "20.10: дата есть") || !strings.Contains(lastParam(calls, "sendRichMessage", "text"), "Неделя") {
 		t.Fatalf("new problem did not come as a new message: %+v", calls)
 	}
 	// Та же проблема при следующей правке - обновление на месте
@@ -317,7 +331,8 @@ func TestLiveMessage(t *testing.T) {
 		t.Fatalf("unchanged problem was not updated in place: %+v", calls)
 	}
 	// Ошибка разбора - снова новое сообщение
-	if calls := editTo("19.10\nРабота\n\n20.10"); !replaced(calls, c, "ошибки") {
+	calls = editTo("19.10\nРабота\n\n20.10")
+	if !replaced(calls, c, "ошибки") {
 		t.Fatalf("parse error did not come as a new message: %+v", calls)
 	}
 	e := liveID(b)
@@ -872,10 +887,10 @@ func TestPreviewButtons(t *testing.T) {
 	status := dm("/status")
 	b.onMessage(ctx, status)
 	calls := tg.take()
-	if countMethod(calls, "sendMessage") != 1 || !strings.Contains(lastParam(calls, "sendMessage", "reply_markup"), viewSubmit) {
+	if countMethod(calls, "sendRichMessage") != 1 || !strings.Contains(lastParam(calls, "sendRichMessage", "reply_markup"), viewSubmit) {
 		t.Fatalf("/status has no way to submit: %+v", calls)
 	}
-	if calls[0].method != "sendMessage" || lastParam(calls, "deleteMessage", "message_id") != fmt.Sprint(status.ID) {
+	if calls[0].method != "sendRichMessage" || lastParam(calls, "deleteMessage", "message_id") != fmt.Sprint(status.ID) {
 		t.Fatalf("/status was not deleted after the preview was sent: %+v", calls)
 	}
 
@@ -889,7 +904,7 @@ func TestPreviewButtons(t *testing.T) {
 	}
 
 	calls = press(viewSubmit, statusID)
-	if countMethod(calls, "sendMessage") != 0 || lastParam(calls, "editMessageText", "message_id") != fmt.Sprint(statusID) ||
+	if countMethod(calls, "sendMessage") != 0 || countMethod(calls, "sendRichMessage") != 0 || lastParam(calls, "editMessageText", "message_id") != fmt.Sprint(statusID) ||
 		!strings.Contains(lastParam(calls, "editMessageText", "reply_markup"), submitPrefix) {
 		t.Fatalf("submit view did not replace the message: %+v", calls)
 	}
@@ -912,7 +927,7 @@ func TestPreviewButtons(t *testing.T) {
 	}
 
 	calls = press(viewNew, fridayID)
-	if countMethod(calls, "editMessageText") != 0 || countMethod(calls, "sendMessage") != 1 {
+	if countMethod(calls, "editMessageText") != 0 || countMethod(calls, "sendRichMessage") != 1 {
 		t.Fatalf("status button did not send a new preview: %+v", calls)
 	}
 
@@ -920,7 +935,7 @@ func TestPreviewButtons(t *testing.T) {
 	tg.sendsFail = true
 	tg.mu.Unlock()
 	b.onMessage(ctx, dm("/submit"))
-	if calls := tg.take(); countMethod(calls, "sendMessage") != 1 || countMethod(calls, "deleteMessage") != 0 {
+	if calls := tg.take(); countMethod(calls, "sendRichMessage") != 1 || countMethod(calls, "deleteMessage") != 0 {
 		t.Fatalf("the command was not kept after a failed send: %+v", calls)
 	}
 }
@@ -929,6 +944,10 @@ func lastParam(calls []apiCall, method, param string) string {
 	v := ""
 	for _, c := range calls {
 		if c.method == method {
+			if param == "text" {
+				v = c.text()
+				continue
+			}
 			v = c.params[param]
 		}
 	}
@@ -963,7 +982,7 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 
 	b.onMessage(ctx, dm("/status"))
 	preview := strings.Join(tg.sent(tg.take()), "\n")
-	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "Пн 19.10 8ч ⚠️ вручную · в Jira 6ч") {
+	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "<tr><td>Пн 19.10</td><td>8ч</td><td>⚠️ вручную · в Jira 6ч</td></tr>") {
 		t.Fatalf("manual day is not counted as written or its mismatch is hidden:\n%s", preview)
 	}
 
@@ -998,7 +1017,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	b.onMessage(ctx, dm("Str0ng-Passphrase-XYZ"))
 	calls := tg.take()
 	// После отправки живой предпросмотр показывает свежее состояние на месте
-	if lastParam(calls, "editMessageText", "message_id") != live || !strings.Contains(lastParam(calls, "editMessageText", "text"), "Вт 20.10 8ч ☑️") {
+	if lastParam(calls, "editMessageText", "message_id") != live || !strings.Contains(lastParam(calls, "editMessageText", "text"), "<tr><td>Вт 20.10</td><td>8ч</td><td>☑️</td></tr>") {
 		t.Fatalf("live preview not refreshed after submit: %+v", calls)
 	}
 	if len(runner.jobs) != 1 {
@@ -1010,7 +1029,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	}
 
 	b.onMessage(ctx, dm("/status"))
-	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "Вт 20.10 8ч ☑️") || strings.Contains(preview, "К записи") {
+	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "<tr><td>Вт 20.10</td><td>8ч</td><td>☑️</td></tr>") || strings.Contains(preview, "К записи") {
 		t.Fatalf("day is not fully written after submit:\n%s", preview)
 	}
 }
@@ -1139,12 +1158,12 @@ func TestWeekArchiveButtonLifecycle(t *testing.T) {
 	b.pending = pending
 	b.onMessage(ctx, dm("/start "+payload))
 	calls = tg.take()
-	if result := lastParam(calls, "sendMessage", "text"); !strings.Contains(result, "Неделя 19.10") ||
+	if result := lastParam(calls, "sendRichMessage", "text"); !strings.Contains(result, "<blockquote><table compact><tr><td>Пн 19.10</td><td>8ч</td><td>☑️ вручную</td></tr>") ||
 		!strings.Contains(result, "Всё записано и отправлено на проверку") || !strings.Contains(result, "вручную") ||
 		strings.Contains(result, "сегодня") || b.pending != pending || liveID(b) != active {
 		t.Fatalf("incorrect archived result or changed bot state: %+v", calls)
 	}
-	if markup := lastParam(calls, "sendMessage", "reply_markup"); !strings.Contains(markup, postURL(old.Chat.ID, int64(old.ID))) ||
+	if markup := lastParam(calls, "sendRichMessage", "reply_markup"); !strings.Contains(markup, postURL(old.Chat.ID, int64(old.ID))) ||
 		!strings.Contains(markup, "Скрыть") || strings.Contains(markup, "Обновить") {
 		t.Fatalf("archive has incorrect controls: %s", markup)
 	}
@@ -1188,7 +1207,7 @@ func TestWeekArchiveButtonLifecycle(t *testing.T) {
 		t.Fatalf("the archived post edit triggered Telegram calls: %+v", calls)
 	}
 	b.onMessage(ctx, dm("/start "+payload))
-	if result := lastParam(tg.take(), "sendMessage", "text"); !strings.Contains(result, "Неделя 19.10") ||
+	if result := lastParam(tg.take(), "sendRichMessage", "text"); !strings.Contains(result, "Неделя 19.10") ||
 		!strings.Contains(result, "Всё записано и отправлено на проверку") {
 		t.Fatalf("the archived week was lost after rollover: %q", result)
 	}
@@ -1210,15 +1229,20 @@ func TestWeekArchiveReplacesPreviousCard(t *testing.T) {
 		}
 		return archiveStartPrefix + strconv.FormatInt(post.ID, 10)
 	}
-	const savedText = "<b>Неделя 12.10-16.10.2026</b>\n<pre>Пн 12.10  8ч  ☑️ вручную\nВт 13.10  8ч  ☑️\n</pre>\n<b>Итого: 16ч</b>"
-	const displayedText = "<b>Неделя 12.10-16.10.2026</b>\n<blockquote><code>Пн 12.10  8ч  ☑️ вручную\nВт 13.10  8ч  ☑️</code></blockquote>\n<b>Итого: 16ч</b>"
-	first, other := saveArchive(42, savedText), saveArchive(43, displayedText)
+	const header = "<b>Неделя 12.10-16.10.2026</b>\n"
+	const summary = "\n<b>Итого: 14ч</b>"
+	const savedText = header + "<pre>Пн 12.10  8ч        ☑️ вручную\nВт 13.10  6ч из 8ч  ☑️\n    ABC-1 4ч, ABC-2 2ч\n</pre>" + summary
+	const savedQuote = header + "<blockquote><code>Пн 12.10 8ч ☑️ вручную\nВт 13.10 6ч ☑️ норма 8ч\n    ABC-1 4ч, ABC-2 2ч</code></blockquote>" + summary
+	const displayedText = `<p><b>Неделя 12.10-16.10.2026</b></p><blockquote><table compact>` +
+		`<tr><td>Пн 12.10</td><td>8ч</td><td>☑️ вручную</td></tr><tr><td>Вт 13.10</td><td>6ч</td><td>☑️ норма 8ч</td></tr>` +
+		`<tr><td colspan="3">↳ ABC-1 4ч, ABC-2 2ч</td></tr></table></blockquote><p><b>Итого: 14ч</b></p>`
+	first, other := saveArchive(42, savedText), saveArchive(43, savedQuote)
 	b.onMessage(ctx, dm("/status"))
 	active := liveID(b)
 	tg.take()
 
 	b.onMessage(ctx, dm("/start "+first))
-	if got := lastParam(tg.take(), "sendMessage", "text"); got != displayedText {
+	if got := lastParam(tg.take(), "sendRichMessage", "text"); got != displayedText {
 		t.Fatalf("old archive was not reformatted:\n%s", got)
 	}
 	post, err := st.WeekPostByMessage(ctx, b.cfg.ChannelID, 42)
@@ -1230,7 +1254,7 @@ func TestWeekArchiveReplacesPreviousCard(t *testing.T) {
 		t.Fatalf("archive card was not saved: %+v, %v", old, err)
 	}
 	b.onMessage(ctx, dm("/start "+other))
-	if calls := tg.take(); countMethod(calls, "deleteMessage") != 1 || lastParam(calls, "sendMessage", "text") != displayedText {
+	if calls := tg.take(); countMethod(calls, "deleteMessage") != 1 || lastParam(calls, "sendRichMessage", "text") != displayedText {
 		t.Fatalf("opening another archive changed the formatting or touched the previous card: %+v", calls)
 	}
 
@@ -1242,7 +1266,7 @@ func TestWeekArchiveReplacesPreviousCard(t *testing.T) {
 	tg.take()
 	b.onMessage(ctx, dm("/start "+first))
 	calls := tg.take()
-	if countMethod(calls, "sendMessage") != 1 || countMethod(calls, "deleteMessage") != 2 || liveID(b) != active ||
+	if countMethod(calls, "sendRichMessage") != 1 || countMethod(calls, "deleteMessage") != 2 || liveID(b) != active ||
 		!slices.ContainsFunc(calls, func(c apiCall) bool {
 			return c.method == "deleteMessage" && c.params["message_id"] == fmt.Sprint(old.MessageID)
 		}) {

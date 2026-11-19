@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -329,32 +328,45 @@ func (b *Bot) onVacation(ctx context.Context, d time.Time) bool {
 
 var weekdays = [...]string{"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"}
 
-// Моноширинная цитата сохраняет колонки в мобильных и веб-клиентах
 const (
-	weekDaysOpen  = "<blockquote><code>"
-	weekDaysClose = "</code></blockquote>"
+	weekDaysOpen  = "<blockquote><table compact>"
+	weekDaysClose = "</table></blockquote>"
 )
+
+func renderDayRow(date, total, status string) string {
+	return "<tr><td>" + date + "</td><td>" + total + "</td><td>" + status + "</td></tr>"
+}
+
+func renderDayIssues(issues string) string {
+	return `<tr><td colspan="3">↳ ` + issues + "</td></tr>"
+}
+
+// weekTableMessage переводит заголовок и итоги в абзацы расширенного сообщения
+func weekTableMessage(text string) *models.InputRichMessage {
+	header, rest, ok := strings.Cut(text, weekDaysOpen)
+	if !ok {
+		return nil
+	}
+	rows, footer, ok := strings.Cut(rest, weekDaysClose)
+	if !ok {
+		return nil
+	}
+	paragraphs := func(text string) string {
+		text = strings.ReplaceAll(strings.TrimSpace(text), "\n", "<br>")
+		return "<p>" + strings.ReplaceAll(text, "<br><br>", "</p><p>") + "</p>"
+	}
+	return &models.InputRichMessage{
+		HTML: paragraphs(header) + weekDaysOpen + rows + weekDaysClose + paragraphs(footer),
+	}
+}
 
 func renderPreview(in previewInput) string {
 	var b strings.Builder
 	first, last := in.Days[0].Date, in.Days[len(in.Days)-1].Date
 	fmt.Fprintf(&b, "<b>Неделя %s-%s</b>\n", first.Format("02.01"), last.Format("02.01.2006"))
 
-	totals := make([]string, len(in.Days))
-	width := 0
-	for i, d := range in.Days {
-		if d.Total > 0 {
-			totals[i] = parser.FormatDuration(d.Total)
-		}
-		width = max(width, utf8.RuneCountInString(totals[i]))
-	}
-
 	b.WriteString(weekDaysOpen)
-	for i, d := range in.Days {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		// Значок после даты и часов: ширина эмодзи не сдвигает колонки
+	for _, d := range in.Days {
 		mark := "▫️"
 		switch {
 		case d.Mismatch:
@@ -388,13 +400,17 @@ func renderPreview(in previewInput) string {
 		if d.Date.Equal(in.Today) {
 			notes = append(notes, "сегодня")
 		}
-		fmt.Fprintf(&b, "%s %s %-*s %s", weekdays[d.Date.Weekday()], d.Date.Format("02.01"), width, totals[i], mark)
-		if len(notes) > 0 {
-			b.WriteByte(' ')
-			b.WriteString(strings.Join(notes, " · "))
+		date := weekdays[d.Date.Weekday()] + " " + d.Date.Format("02.01")
+		var total string
+		if d.Total > 0 {
+			total = parser.FormatDuration(d.Total)
 		}
+		if len(notes) > 0 {
+			mark += " " + strings.Join(notes, " · ")
+		}
+		b.WriteString(renderDayRow(date, total, mark))
 		if len(d.Issues) > 0 {
-			fmt.Fprintf(&b, "\n    %s", html.EscapeString(strings.Join(d.Issues, ", ")))
+			b.WriteString(renderDayIssues(html.EscapeString(strings.Join(d.Issues, ", "))))
 		}
 	}
 	b.WriteString(weekDaysClose + "\n")

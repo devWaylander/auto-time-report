@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -192,15 +193,43 @@ func (b *Bot) sendWeekArchive(ctx context.Context, msg *models.Message, id strin
 	}
 }
 
-// formatWeekArchive обновляет разметку итогов, сохранённых со старым блоком дней
+// В старых итогах значок стоит после даты и необязательного времени
+var archivedDay = regexp.MustCompile(`^((?:Вс|Пн|Вт|Ср|Чт|Пт|Сб) [0-9]{2}\.[0-9]{2}) +(?:([0-9].*?) +)?([▫☑⚠✏✅🔸🔹]\x{FE0F}?)(?: +(.*))?$`)
+
+// formatWeekArchive обновляет таблицу дней в сохранённых итогах
 func formatWeekArchive(text string) string {
-	header, rest, ok := strings.Cut(text, "<pre>")
-	if !ok {
-		return text
+	for _, tags := range [][2]string{{"<pre>", "</pre>"}, {"<blockquote><code>", "</code></blockquote>"}} {
+		header, rest, ok := strings.Cut(text, tags[0])
+		if !ok {
+			continue
+		}
+		days, summary, ok := strings.Cut(rest, tags[1])
+		if !ok {
+			continue
+		}
+		lines := strings.Split(strings.Trim(days, "\r\n"), "\n")
+		var rows strings.Builder
+		for _, line := range lines {
+			if parts := archivedDay.FindStringSubmatch(strings.TrimSpace(line)); parts != nil {
+				total, norm, hasNorm := strings.Cut(parts[2], " из ")
+				status, notes := parts[3], parts[4]
+				if hasNorm {
+					if notes != "" {
+						notes = " · " + notes
+					}
+					notes = "норма " + norm + notes
+				}
+				if notes != "" {
+					status += " " + notes
+				}
+				rows.WriteString(renderDayRow(parts[1], total, status))
+			} else if issues, ok := strings.CutPrefix(line, "    "); ok {
+				rows.WriteString(renderDayIssues(strings.TrimSpace(issues)))
+			} else {
+				return text
+			}
+		}
+		return header + weekDaysOpen + rows.String() + weekDaysClose + summary
 	}
-	days, summary, ok := strings.Cut(rest, "</pre>")
-	if !ok {
-		return text
-	}
-	return header + weekDaysOpen + strings.Trim(days, "\r\n") + weekDaysClose + summary
+	return text
 }

@@ -204,6 +204,15 @@ func (b *Bot) today() time.Time {
 
 // send пишет владельцу в личку, HTML-разметка
 func (b *Bot) send(ctx context.Context, text string, markup models.ReplyMarkup) (*models.Message, error) {
+	if rich := weekTableMessage(text); rich != nil {
+		msg, err := b.api.SendRichMessage(ctx, &tgbot.SendRichMessageParams{
+			ChatID: b.cfg.OwnerID, RichMessage: *rich, ReplyMarkup: markup,
+		})
+		if err != nil {
+			return nil, errors.New(b.redact(err.Error()))
+		}
+		return msg, nil
+	}
 	msg, err := b.api.SendMessage(ctx, &tgbot.SendMessageParams{
 		ChatID:             b.cfg.OwnerID,
 		Text:               text,
@@ -233,14 +242,21 @@ func (b *Bot) edit(ctx context.Context, messageID int, text string, markup model
 
 // editMessage меняет текст сообщения в личке. Тот же текст - не ошибка
 func (b *Bot) editMessage(ctx context.Context, messageID int, text string, markup models.ReplyMarkup) error {
-	_, err := b.api.EditMessageText(ctx, &tgbot.EditMessageTextParams{
+	params := &tgbot.EditMessageTextParams{
 		ChatID:             b.cfg.OwnerID,
 		MessageID:          messageID,
 		Text:               text,
 		ParseMode:          models.ParseModeHTML,
 		LinkPreviewOptions: &models.LinkPreviewOptions{IsDisabled: tgbot.True()},
 		ReplyMarkup:        markup,
-	})
+	}
+	if rich := weekTableMessage(text); rich != nil {
+		params.Text = ""
+		params.ParseMode = ""
+		params.LinkPreviewOptions = nil
+		params.RichMessage = rich
+	}
+	_, err := b.api.EditMessageText(ctx, params)
 	if err != nil && !strings.Contains(err.Error(), "message is not modified") {
 		return errors.New(b.redact(err.Error()))
 	}
