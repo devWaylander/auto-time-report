@@ -322,7 +322,11 @@ func TestLiveMessage(t *testing.T) {
 	}
 	// /status становится живым, правка обновляет его на месте
 	b.onMessage(ctx, dm("/status"))
-	tg.take()
+	status := lastParam(tg.take(), "sendRichMessage", "text")
+	if !strings.Contains(status, "</b></p><blockquote><table compact>") ||
+		!strings.Contains(status, "</table></blockquote><p>&#8288;<br><b>Итого:") {
+		t.Fatalf("status must have one blank line below the quote: %s", status)
+	}
 	a := liveID(b)
 	if calls := editTo("19.10\nРабота - 3ч"); !inPlace(calls, a, "3ч") {
 		t.Fatalf("/status was not updated by the edit: %+v", calls)
@@ -1301,7 +1305,7 @@ func TestWeekArchiveReplacesPreviousCard(t *testing.T) {
 	const savedQuote = header + "<blockquote><code>Пн 12.10 8ч ☑️ вручную\nВт 13.10 6ч ☑️ норма 8ч\n    ABC-1 4ч, ABC-2 2ч</code></blockquote>" + summary
 	const displayedText = `<p><b>Неделя 12.10-16.10.2026</b></p><blockquote><table compact>` +
 		`<tr><td>Пн 12.10</td><td>8ч</td><td>☑️ вручную</td></tr><tr><td>Вт 13.10</td><td>6ч</td><td>☑️ норма 8ч</td></tr>` +
-		`<tr><td colspan="3">↳ ABC-1 4ч, ABC-2 2ч</td></tr></table></blockquote><p><b>Итого: 14ч</b></p>`
+		`<tr><td colspan="3">↳ ABC-1 4ч, ABC-2 2ч</td></tr></table></blockquote><p>&#8288;<br><b>Итого: 14ч</b></p>`
 	first, other := saveArchive(42, savedText), saveArchive(43, savedQuote)
 	b.onMessage(ctx, dm("/status"))
 	active := liveID(b)

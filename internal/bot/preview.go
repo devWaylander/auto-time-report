@@ -359,6 +359,7 @@ const (
 	weekDaysOpen    = "<blockquote><table compact>"
 	weekDaysClose   = "</table></blockquote>"
 	weekStatusEmoji = `[▫☑⚠✏✅🔸🔹]\x{FE0F}?`
+	wordJoinerHTML  = "&#8288;"
 )
 
 var emojiOnlyWeekCell = regexp.MustCompile(`<td>(` + weekStatusEmoji + `)</td>`)
@@ -382,7 +383,11 @@ func weekTableMessage(text string) *models.InputRichMessage {
 		return nil
 	}
 	// Android растягивает ячейки с одним эмодзи до квадрата, U+2060 оставляет обычную высоту строки
-	rows = emojiOnlyWeekCell.ReplaceAllString(rows, `<td>${1}&#8288;</td>`)
+	rows = emojiOnlyWeekCell.ReplaceAllString(rows, `<td>${1}`+wordJoinerHTML+`</td>`)
+	if summary := strings.TrimSpace(footer); summary != "" {
+		// Невидимый символ сохраняет одну пустую строку перед итогами
+		footer = wordJoinerHTML + "\n" + summary
+	}
 	paragraphs := func(text string) string {
 		text = strings.ReplaceAll(strings.TrimSpace(text), "\n", "<br>")
 		return "<p>" + strings.ReplaceAll(text, "<br><br>", "</p><p>") + "</p>"
