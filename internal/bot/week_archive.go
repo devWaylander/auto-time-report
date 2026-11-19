@@ -194,7 +194,7 @@ func (b *Bot) sendWeekArchive(ctx context.Context, msg *models.Message, id strin
 }
 
 // В старых итогах значок стоит после даты и необязательного времени
-var archivedDay = regexp.MustCompile(`^((?:Вс|Пн|Вт|Ср|Чт|Пт|Сб) [0-9]{2}\.[0-9]{2}) +(?:([0-9].*?) +)?([▫☑⚠✏✅🔸🔹]\x{FE0F}?)(?: +(.*))?$`)
+var archivedDay = regexp.MustCompile(`^((?:Вс|Пн|Вт|Ср|Чт|Пт|Сб) [0-9]{2}\.[0-9]{2}) +(?:([0-9].*?) +)?(` + weekStatusEmoji + `)(?: +(.*))?$`)
 
 // formatWeekArchive обновляет таблицу дней в сохранённых итогах
 func formatWeekArchive(text string) string {

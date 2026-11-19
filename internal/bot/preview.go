@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -329,9 +330,12 @@ func (b *Bot) onVacation(ctx context.Context, d time.Time) bool {
 var weekdays = [...]string{"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"}
 
 const (
-	weekDaysOpen  = "<blockquote><table compact>"
-	weekDaysClose = "</table></blockquote>"
+	weekDaysOpen    = "<blockquote><table compact>"
+	weekDaysClose   = "</table></blockquote>"
+	weekStatusEmoji = `[▫☑⚠✏✅🔸🔹]\x{FE0F}?`
 )
+
+var emojiOnlyWeekCell = regexp.MustCompile(`<td>(` + weekStatusEmoji + `)</td>`)
 
 func renderDayRow(date, total, status string) string {
 	return "<tr><td>" + date + "</td><td>" + total + "</td><td>" + status + "</td></tr>"
@@ -351,6 +355,8 @@ func weekTableMessage(text string) *models.InputRichMessage {
 	if !ok {
 		return nil
 	}
+	// Android растягивает ячейки с одним эмодзи до квадрата, U+2060 оставляет обычную высоту строки
+	rows = emojiOnlyWeekCell.ReplaceAllString(rows, `<td>${1}&#8288;</td>`)
 	paragraphs := func(text string) string {
 		text = strings.ReplaceAll(strings.TrimSpace(text), "\n", "<br>")
 		return "<p>" + strings.ReplaceAll(text, "<br><br>", "</p><p>") + "</p>"

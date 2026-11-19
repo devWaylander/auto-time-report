@@ -890,6 +890,10 @@ func TestPreviewButtons(t *testing.T) {
 	if countMethod(calls, "sendRichMessage") != 1 || !strings.Contains(lastParam(calls, "sendRichMessage", "reply_markup"), viewSubmit) {
 		t.Fatalf("/status has no way to submit: %+v", calls)
 	}
+	if got := lastParam(calls, "sendRichMessage", "text"); !strings.Contains(got, "<td>🔹&#8288;</td>") ||
+		!strings.Contains(got, "<td>▫️&#8288;</td>") || !strings.Contains(got, "<td>▫️ сегодня</td>") {
+		t.Fatalf("preview did not handle standalone emoji in its table:\n%s", got)
+	}
 	if calls[0].method != "sendRichMessage" || lastParam(calls, "deleteMessage", "message_id") != fmt.Sprint(status.ID) {
 		t.Fatalf("/status was not deleted after the preview was sent: %+v", calls)
 	}
@@ -1017,7 +1021,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	b.onMessage(ctx, dm("Str0ng-Passphrase-XYZ"))
 	calls := tg.take()
 	// После отправки живой предпросмотр показывает свежее состояние на месте
-	if lastParam(calls, "editMessageText", "message_id") != live || !strings.Contains(lastParam(calls, "editMessageText", "text"), "<tr><td>Вт 20.10</td><td>8ч</td><td>☑️</td></tr>") {
+	if lastParam(calls, "editMessageText", "message_id") != live || !strings.Contains(lastParam(calls, "editMessageText", "text"), "<tr><td>Вт 20.10</td><td>8ч</td><td>☑️&#8288;</td></tr>") {
 		t.Fatalf("live preview not refreshed after submit: %+v", calls)
 	}
 	if len(runner.jobs) != 1 {
@@ -1029,7 +1033,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	}
 
 	b.onMessage(ctx, dm("/status"))
-	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "<tr><td>Вт 20.10</td><td>8ч</td><td>☑️</td></tr>") || strings.Contains(preview, "К записи") {
+	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "<tr><td>Вт 20.10</td><td>8ч</td><td>☑️&#8288;</td></tr>") || strings.Contains(preview, "К записи") {
 		t.Fatalf("day is not fully written after submit:\n%s", preview)
 	}
 }
@@ -1256,6 +1260,11 @@ func TestWeekArchiveReplacesPreviousCard(t *testing.T) {
 	b.onMessage(ctx, dm("/start "+other))
 	if calls := tg.take(); countMethod(calls, "deleteMessage") != 1 || lastParam(calls, "sendRichMessage", "text") != displayedText {
 		t.Fatalf("opening another archive changed the formatting or touched the previous card: %+v", calls)
+	}
+	const savedTable = header + `<blockquote><table compact><tr><td>Пн 12.10</td><td>8ч</td><td>☑️</td></tr></table></blockquote>` + summary
+	b.onMessage(ctx, dm("/start "+saveArchive(44, savedTable)))
+	if got := lastParam(tg.take(), "sendRichMessage", "text"); !strings.Contains(got, "<td>☑️&#8288;</td>") {
+		t.Fatalf("emoji in the saved table was not made compact:\n%s", got)
 	}
 
 	restarted, err := New(b.cfg, st, b.cal, runner, b.userID)
