@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,6 +39,28 @@ func TestOpenRequiresMigrations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "empty.db")
 	if _, err := Open(context.Background(), "sqlite:"+path); err == nil {
 		t.Fatal("expected error for database without migrations")
+	}
+}
+
+func TestOpenRequiresDailyReminderMigration(t *testing.T) {
+	ctx := context.Background()
+	url := storetest.NewDatabaseURL(t)
+	s, err := Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE notifications DROP COLUMN message_id;
+		DELETE FROM schema_migrations WHERE version = '20261119150000'`)
+	if err := errors.Join(err, s.Close()); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(ctx, url)
+	if err == nil {
+		_ = s.Close()
+		t.Fatal("opened database without daily reminder migration")
+	}
+	if !strings.Contains(err.Error(), "make migrate-up") {
+		t.Fatalf("missing migration hint in %v", err)
 	}
 }
 

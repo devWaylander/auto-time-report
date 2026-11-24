@@ -265,15 +265,6 @@ func (b *Bot) editMessage(ctx context.Context, messageID int, text string, marku
 	return nil
 }
 
-func (b *Bot) removeKeyboard(ctx context.Context, messageID int) {
-	_, err := b.api.EditMessageReplyMarkup(ctx, &tgbot.EditMessageReplyMarkupParams{
-		ChatID: b.cfg.OwnerID, MessageID: messageID,
-	})
-	if err != nil {
-		slog.Error("remove keyboard", "error", b.redact(err.Error()))
-	}
-}
-
 func (b *Bot) deleteMessage(ctx context.Context, chatID int64, messageID int) error {
 	_, err := b.api.DeleteMessage(ctx, &tgbot.DeleteMessageParams{ChatID: chatID, MessageID: messageID})
 	if err != nil {
@@ -439,9 +430,9 @@ func (b *Bot) onPostChanged(ctx context.Context, post store.WeekPost, msg *model
 		return
 	}
 	next.Problems = v.problems
-	// Пустой пост обновляет текущий статус без пуша, даже при смене недели
-	if errors.Is(err, parser.ErrNoEntries) || sameWeek && (v.problems == "" ||
-		active.PostID == 0 && err == nil || active.PostID == post.ID && v.problems == active.Problems) {
+	// Новый пост без проблем обновляет текущий статус без пуша, даже при смене недели
+	if v.problems == "" || sameWeek && (active.PostID == 0 && err == nil ||
+		active.PostID == post.ID && v.problems == active.Problems) {
 		next.MessageID = active.MessageID
 	}
 	if err := b.showActive(ctx, v, next); err != nil {
@@ -466,12 +457,16 @@ func (b *Bot) refreshLive(ctx context.Context, post store.WeekPost) {
 	b.syncWeekArchive(ctx, current, b.viewOf(ctx, w, err, false, ""), nil)
 }
 
-func (b *Bot) forgetLive(ctx context.Context, messageID int) {
+func (b *Bot) hideMessage(ctx context.Context, messageID int) bool {
 	b.postMu.Lock()
 	defer b.postMu.Unlock()
+	if messageID == 0 || !b.retireMessage(ctx, messageID, "Сообщение скрыто") {
+		return false
+	}
 	if b.active.MessageID == messageID {
 		b.clearActive(ctx)
 	}
+	return true
 }
 
 func (b *Bot) isCurrentWeek(post store.WeekPost) bool {
@@ -683,13 +678,11 @@ func (b *Bot) onCallback(ctx context.Context, cq *models.CallbackQuery) {
 		b.answer(ctx, cq, "", false)
 		b.sendPreview(ctx, false)
 	case cq.Data == hideData:
-		b.answer(ctx, cq, "", false)
-		if messageID != 0 {
-			b.forgetLive(ctx, messageID)
-			if err := b.deleteMessage(ctx, b.cfg.OwnerID, messageID); err != nil {
-				slog.Error("hide message", "error", err)
-			}
+		if !b.hideMessage(ctx, messageID) {
+			b.answer(ctx, cq, "Не удалось скрыть сообщение", false)
+			return
 		}
+		b.answer(ctx, cq, "", false)
 	default:
 		b.answer(ctx, cq, "Кнопка устарела", false)
 	}

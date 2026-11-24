@@ -20,6 +20,8 @@ type fakeOutput struct {
 	failures int
 }
 
+func (f *fakeOutput) ReconcileDailyReminders(context.Context) {}
+
 func (f *fakeOutput) DailyReminder(_ context.Context, date time.Time) error {
 	if f.failures > 0 {
 		f.failures--

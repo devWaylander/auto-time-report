@@ -225,6 +225,12 @@ func dm(text string) *models.Message {
 	return &models.Message{ID: nextMessageID, From: &models.User{ID: 42}, Chat: models.Chat{ID: 42}, Text: text}
 }
 
+func replyDM(text string, promptID int) *models.Message {
+	msg := dm(text)
+	msg.ReplyToMessage = &models.Message{ID: promptID}
+	return msg
+}
+
 func latestText(t *testing.T, b *Bot) string {
 	t.Helper()
 	p, err := b.store.LatestWeekPost(context.Background(), b.userID)
@@ -388,7 +394,16 @@ func TestLiveMessage(t *testing.T) {
 	// "Скрыть" убирает сообщение, и бот его больше не трогает
 	b.onMessage(ctx, dm("/submit"))
 	tg.take()
-	press(hideData, liveID(b))
+	hidden := liveID(b)
+	tg.mu.Lock()
+	tg.deletesFail = true
+	tg.mu.Unlock()
+	calls = press(hideData, hidden)
+	if lastParam(calls, "editMessageText", "message_id") != hidden ||
+		lastParam(calls, "editMessageText", "text") != "Сообщение скрыто" ||
+		lastParam(calls, "editMessageText", "reply_markup") != `{"inline_keyboard":[]}` {
+		t.Fatalf("non-deletable message was not hidden: %+v", calls)
+	}
 	if calls := editTo("19.10\nРабота - 8ч"); len(calls) != 0 {
 		t.Fatalf("hidden message was touched: %+v", calls)
 	}
@@ -605,6 +620,71 @@ func TestDailyReminderRemovedWhenDateIsFilled(t *testing.T) {
 	}
 }
 
+func TestDailyReminderCleanupRetriesOnNextWeek(t *testing.T) {
+	b, tg, _, st := newTelegramBot(t)
+	ctx := context.Background()
+	b.clock = func() time.Time { return day(11, 20) }
+	week := channelPost("16.11\nРабота - 8ч", day(11, 16))
+	b.onChannelPost(ctx, week, false)
+	target := b.today()
+	if err := b.DailyReminder(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	reminders, err := st.DailyReminderMessages(ctx, b.userID, target, target)
+	if err != nil || len(reminders) != 1 {
+		t.Fatalf("daily reminder was not recorded: %+v, %v", reminders, err)
+	}
+	reminderID := strconv.Itoa(reminders[0].MessageID)
+	tg.take()
+
+	tg.mu.Lock()
+	tg.deletesFail, tg.editsFail = true, true
+	tg.mu.Unlock()
+	b.onChannelPost(ctx, edit(week, week.Text+"\n20.11\nРабота - 8ч", target), true)
+	if calls := tg.take(); lastParam(calls, "deleteMessage", "message_id") != reminderID {
+		t.Fatalf("no attempt to remove reminder: %+v", calls)
+	}
+
+	// К понедельнику доступна правка сообщения, даже если Telegram уже не даёт удалить его
+	tg.mu.Lock()
+	tg.editsFail = false
+	tg.mu.Unlock()
+	b.clock = func() time.Time { return day(11, 23) }
+	notifier := notify.New(st, b.cal, b, b.cfg.Location, b.userID, b.cfg.DefaultIssue)
+	if err := notifier.Tick(ctx, b.now()); err != nil {
+		t.Fatal(err)
+	}
+	if calls := tg.take(); lastParam(calls, "editMessageText", "message_id") != reminderID ||
+		lastParam(calls, "editMessageText", "text") != "Записи за 20.11 добавлены" {
+		t.Fatalf("scheduler did not retry reminder cleanup: %+v", calls)
+	}
+	if reminders, err := st.DailyReminderMessages(ctx, b.userID, target, target); err != nil || len(reminders) != 0 {
+		t.Fatalf("resolved reminder is still tracked: %+v, %v", reminders, err)
+	}
+}
+
+func TestFilledWeekPostReusesPreviousPreview(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	ctx := context.Background()
+	b.onChannelPost(ctx, channelPost("23.10\nРабота - 8ч", day(10, 23)), false)
+	if err := b.WeeklyPreview(ctx); err != nil {
+		t.Fatal(err)
+	}
+	previousID := liveID(b)
+	tg.take()
+
+	week := day(10, 26)
+	b.clock = func() time.Time { return week }
+	b.onChannelPost(ctx, channelPost("26.10\nРабота - 8ч", week), false)
+	if calls := tg.take(); !inPlace(calls, previousID, "Неделя 26.10") ||
+		strings.Contains(lastParam(calls, "editMessageText", "text"), "Конец рабочей недели") {
+		t.Fatalf("new post did not reuse the previous preview: %+v", calls)
+	}
+	if got := b.active.WeekStart.Format(time.DateOnly); got != week.Format(time.DateOnly) {
+		t.Fatalf("active week is %s after rollover", got)
+	}
+}
+
 func TestMissingCurrentWeekPost(t *testing.T) {
 	b, tg, runner, st := newTelegramBot(t)
 	ctx := context.Background()
@@ -719,7 +799,7 @@ func TestPassphraseStartingWithSlash(t *testing.T) {
 	}
 	b.pending = &pendingSubmit{postID: saved.ID, hash: hashText(saved.Text), promptID: 7, expires: fixedClock().Add(time.Minute)}
 
-	msg := dm("/Str0ng-Passphrase-XYZ")
+	msg := replyDM("/Str0ng-Passphrase-XYZ", 7)
 	b.onMessage(ctx, msg)
 
 	if runner.passphrase != "/Str0ng-Passphrase-XYZ" {
@@ -756,7 +836,7 @@ func TestExpiredPassphraseIsDeletedNotUsed(t *testing.T) {
 	b, tg, runner, _ := newTelegramBot(t)
 	b.pending = &pendingSubmit{postID: 1, hash: "x", promptID: 7, expires: fixedClock().Add(-time.Second)}
 
-	b.onMessage(context.Background(), dm("late passphrase"))
+	b.onMessage(context.Background(), replyDM("late passphrase", 7))
 	if runner.passphrase != "" {
 		t.Fatal("expired passphrase was used")
 	}
@@ -794,7 +874,7 @@ func TestPendingExpiresByTimer(t *testing.T) {
 
 // Повторное нажатие отправки заменяет запрос фразы: прежний удаляется
 func TestSecondSubmitReplacesPrompt(t *testing.T) {
-	b, tg, _, st := newTelegramBot(t)
+	b, tg, runner, st := newTelegramBot(t)
 	ctx := context.Background()
 	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8ч", day(10, 19)), false)
 	b.onMessage(ctx, dm("/submit"))
@@ -812,6 +892,66 @@ func TestSecondSubmitReplacesPrompt(t *testing.T) {
 	calls := tg.take()
 	if lastParam(calls, "deleteMessage", "message_id") != "7" || b.pending == nil || b.pending.promptID == 7 {
 		t.Fatalf("old prompt not replaced: %+v", calls)
+	}
+	latest := b.pending
+	oldReply := replyDM("ответ на прежний запрос", 7)
+	b.onMessage(ctx, oldReply)
+	if calls := tg.take(); lastParam(calls, "deleteMessage", "message_id") != fmt.Sprint(oldReply.ID) || b.pending != latest || len(runner.jobs) != 0 {
+		t.Fatalf("old reply was accepted or left in the chat: %+v", calls)
+	}
+	b.onMessage(ctx, dm("/status"))
+	if calls := tg.take(); lastParam(calls, "sendRichMessage", "text") == "" || b.pending != latest || len(runner.jobs) != 0 {
+		t.Fatalf("status request interfered with passphrase prompt: %+v", calls)
+	}
+	b.pending = nil
+}
+
+func TestSubmitPromptKeepsPreviewKeyboard(t *testing.T) {
+	b, tg, _, st := newTelegramBot(t)
+	ctx := context.Background()
+	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8ч", day(10, 19)), false)
+	b.onMessage(ctx, dm("/submit"))
+	post, err := st.LatestWeekPost(ctx, b.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := fmt.Sprintf("%s%d:%s:0", submitPrefix, post.ID, hashText(post.Text))
+	if calls := tg.take(); !strings.Contains(lastParam(calls, "sendRichMessage", "reply_markup"), data) {
+		t.Fatalf("submit preview did not offer the action: %+v", calls)
+	}
+	press := func() []apiCall {
+		t.Helper()
+		b.onCallback(ctx, &models.CallbackQuery{
+			ID: "cb", From: models.User{ID: b.cfg.OwnerID}, Data: data,
+			Message: models.MaybeInaccessibleMessage{Message: &models.Message{ID: b.active.MessageID}},
+		})
+		calls := tg.take()
+		if countMethod(calls, "editMessageReplyMarkup") != 0 {
+			t.Fatalf("submit preview lost its keyboard: %+v", calls)
+		}
+		return calls
+	}
+	tg.mu.Lock()
+	tg.sendsFail = true
+	tg.mu.Unlock()
+	if calls := press(); countMethod(calls, "sendMessage") != 1 || b.pending != nil {
+		t.Fatalf("failed prompt started passphrase handling: %+v", calls)
+	}
+	tg.mu.Lock()
+	tg.sendsFail = false
+	tg.mu.Unlock()
+	if calls := press(); countMethod(calls, "sendMessage") != 1 || b.pending == nil {
+		t.Fatalf("could not retry after failed prompt: %+v", calls)
+	}
+	b.onMessage(ctx, dm("/cancel"))
+	tg.take()
+	if calls := press(); countMethod(calls, "sendMessage") != 1 || b.pending == nil {
+		t.Fatalf("could not retry after cancellation: %+v", calls)
+	}
+	b.expirePending(b.pending)
+	tg.take()
+	if calls := press(); countMethod(calls, "sendMessage") != 1 || b.pending == nil {
+		t.Fatalf("could not retry after expiry: %+v", calls)
 	}
 	b.pending = nil
 }
@@ -911,7 +1051,7 @@ func TestCancelWhilePending(t *testing.T) {
 	b, tg, runner, _ := newTelegramBot(t)
 	b.pending = &pendingSubmit{postID: 1, hash: "x", promptID: 7, expires: fixedClock().Add(time.Minute)}
 
-	b.onMessage(context.Background(), dm("/cancel"))
+	b.onMessage(context.Background(), replyDM("/cancel", 7))
 	if b.pending != nil || runner.passphrase != "" {
 		t.Fatal("/cancel did not cancel or was taken as passphrase")
 	}
@@ -1090,7 +1230,7 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 	tg.take()
 
 	b.pending = &pendingSubmit{postID: saved.ID, hash: hashText(saved.Text), promptID: 7, expires: fixedClock().Add(time.Minute)}
-	b.onMessage(ctx, dm("Str0ng-Passphrase-XYZ"))
+	b.onMessage(ctx, replyDM("Str0ng-Passphrase-XYZ", 7))
 	outcome := strings.Join(tg.sent(tg.take()), "\n")
 	if !strings.Contains(outcome, "уже было в Jira вручную, пропущено. ⚠️ В Jira 6ч, в посте 8ч") {
 		t.Fatalf("outcome does not show the mismatch:\n%s", outcome)
@@ -1135,7 +1275,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	live := liveID(b)
 
 	b.pending = &pendingSubmit{postID: saved.ID, hash: hashText(saved.Text), promptID: 7, expires: fixedClock().Add(time.Minute)}
-	b.onMessage(ctx, dm("Str0ng-Passphrase-XYZ"))
+	b.onMessage(ctx, replyDM("Str0ng-Passphrase-XYZ", 7))
 	calls := tg.take()
 	// После отправки живой предпросмотр показывает свежее состояние на месте
 	if lastParam(calls, "editMessageText", "message_id") != live || !strings.Contains(lastParam(calls, "editMessageText", "text"), "<tr><td>Вт 20.10</td><td>8ч</td><td>☑️&#8288;</td></tr>") {
@@ -1255,7 +1395,7 @@ func TestWeekArchiveButtonLifecycle(t *testing.T) {
 			postID: post.ID, hash: hashText(text), approve: approval,
 			promptID: 7, expires: b.clock().Add(time.Minute),
 		}
-		b.onMessage(ctx, dm("test-passphrase"))
+		b.onMessage(ctx, replyDM("test-passphrase", 7))
 		return tg.take()
 	}
 	if calls := submit(false); countMethod(calls, "editMessageReplyMarkup") != 0 ||

@@ -18,11 +18,13 @@ import (
 const settingsPrefix = "set:"
 
 const (
-	setDaily   = settingsPrefix + "daily"
-	setWeekly  = settingsPrefix + "weekly"
-	setPause1  = settingsPrefix + "p1"
-	setPause7  = settingsPrefix + "p7"
-	setUnpause = settingsPrefix + "p0"
+	setDailyOn   = settingsPrefix + "daily:on"
+	setDailyOff  = settingsPrefix + "daily:off"
+	setWeeklyOn  = settingsPrefix + "weekly:on"
+	setWeeklyOff = settingsPrefix + "weekly:off"
+	setPause1    = settingsPrefix + "p1"
+	setPause7    = settingsPrefix + "p7"
+	setUnpause   = settingsPrefix + "p0"
 )
 
 var hhmmRe = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
@@ -85,11 +87,11 @@ func renderSettings(st store.Settings, vacations []store.Vacation, now time.Time
 }
 
 func settingsKeyboard(st store.Settings, now time.Time) models.ReplyMarkup {
-	toggle := func(name string, on bool) string {
-		if on {
-			return "Выключить " + name
+	reminderButton := func(name string, enabled bool, on, off string) models.InlineKeyboardButton {
+		if enabled {
+			return models.InlineKeyboardButton{Text: "Выключить " + name, CallbackData: off}
 		}
-		return "Включить " + name
+		return models.InlineKeyboardButton{Text: "Включить " + name, CallbackData: on}
 	}
 	pause := []models.InlineKeyboardButton{
 		{Text: "Пауза до завтра", CallbackData: setPause1},
@@ -99,43 +101,46 @@ func settingsKeyboard(st store.Settings, now time.Time) models.ReplyMarkup {
 		pause = []models.InlineKeyboardButton{{Text: "Снять паузу", CallbackData: setUnpause}}
 	}
 	return models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-		{{Text: toggle("ежедневное", st.DailyEnabled), CallbackData: setDaily}},
-		{{Text: toggle("недельное", st.WeeklyEnabled), CallbackData: setWeekly}},
+		{reminderButton("ежедневное", st.DailyEnabled, setDailyOn, setDailyOff)},
+		{reminderButton("недельное", st.WeeklyEnabled, setWeeklyOn, setWeeklyOff)},
 		pause,
 	}}
 }
 
 func (b *Bot) onSettingsButton(ctx context.Context, cq *models.CallbackQuery, messageID int) {
-	err := b.updateSettings(ctx, func(st *store.Settings) {
-		today := b.today()
-		switch cq.Data {
-		case setDaily:
-			st.DailyEnabled = !st.DailyEnabled
-		case setWeekly:
-			st.WeeklyEnabled = !st.WeeklyEnabled
-		case setPause1:
-			st.PausedUntil = today.AddDate(0, 0, 1)
-		case setPause7:
-			st.PausedUntil = today.AddDate(0, 0, 7)
-		case setUnpause:
-			st.PausedUntil = time.Time{}
+	var change func(*store.Settings)
+	switch cq.Data {
+	case setDailyOn, setDailyOff:
+		change = func(st *store.Settings) { st.DailyEnabled = cq.Data == setDailyOn }
+	case setWeeklyOn, setWeeklyOff:
+		change = func(st *store.Settings) { st.WeeklyEnabled = cq.Data == setWeeklyOn }
+	case setPause1:
+		change = func(st *store.Settings) { st.PausedUntil = b.today().AddDate(0, 0, 1) }
+	case setPause7:
+		change = func(st *store.Settings) { st.PausedUntil = b.today().AddDate(0, 0, 7) }
+	case setUnpause:
+		change = func(st *store.Settings) { st.PausedUntil = time.Time{} }
+	}
+	answer := "Кнопка устарела"
+	if change != nil {
+		if err := b.updateSettings(ctx, change); err != nil {
+			slog.Error("update settings", "error", err)
+			b.answer(ctx, cq, "Не сохранено", true)
+			return
 		}
-	})
-	if err != nil {
-		slog.Error("update settings", "error", err)
-		b.answer(ctx, cq, "Не сохранено", true)
+		answer = "Сохранено"
+	}
+	b.answer(ctx, cq, answer, false)
+	if messageID == 0 {
 		return
 	}
-	b.answer(ctx, cq, "Сохранено", false)
 
 	text, markup, err := b.settingsView(ctx)
 	if err != nil {
 		slog.Error("settings", "error", err)
 		return
 	}
-	if messageID != 0 {
-		b.edit(ctx, messageID, text, markup)
-	}
+	b.edit(ctx, messageID, text, markup)
 }
 
 func (b *Bot) updateSettings(ctx context.Context, change func(*store.Settings)) error {

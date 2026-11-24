@@ -661,6 +661,37 @@ func (b *Bot) DailyReminder(ctx context.Context, date time.Time) error {
 	return nil
 }
 
+// ReconcileDailyReminders повторяет уборку после сбоя или перезапуска бота
+func (b *Bot) ReconcileDailyReminders(ctx context.Context) {
+	b.postMu.Lock()
+	defer b.postMu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	now := b.now()
+	week := calendar.WeekStart(now)
+	for _, start := range []time.Time{week, week.AddDate(0, 0, -7)} {
+		reminders, err := b.store.DailyReminderMessages(ctx, b.userID, start, start.AddDate(0, 0, 6))
+		if err != nil {
+			slog.Warn("load daily reminder messages", "error", err)
+			return
+		}
+		if len(reminders) == 0 {
+			continue
+		}
+		post, err := b.store.WeekPostForWeek(ctx, b.userID, start)
+		if err != nil {
+			if !errors.Is(err, store.ErrNotFound) {
+				slog.Warn("load week for daily reminders", "error", err)
+			}
+			continue
+		}
+		if report, err := parser.Parse(post.Text, b.cfg.DefaultIssue, now); err == nil {
+			b.retireResolvedDailyReminders(ctx, report, reminders)
+		}
+	}
+}
+
 // removeResolvedDailyReminders убирает напоминания за заполненные даты, вызывать под postMu
 func (b *Bot) removeResolvedDailyReminders(ctx context.Context, report parser.Report, week time.Time) {
 	reminders, err := b.store.DailyReminderMessages(ctx, b.userID, week, week.AddDate(0, 0, 6))
@@ -668,6 +699,10 @@ func (b *Bot) removeResolvedDailyReminders(ctx context.Context, report parser.Re
 		slog.Warn("load daily reminder messages", "error", err)
 		return
 	}
+	b.retireResolvedDailyReminders(ctx, report, reminders)
+}
+
+func (b *Bot) retireResolvedDailyReminders(ctx context.Context, report parser.Report, reminders []store.DailyReminderMessage) {
 	for _, reminder := range reminders {
 		date := time.Date(reminder.Date.Year(), reminder.Date.Month(), reminder.Date.Day(), 0, 0, 0, 0, b.cfg.Location)
 		if report.DayTotal(date) == 0 {

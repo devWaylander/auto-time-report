@@ -16,6 +16,7 @@ import (
 
 // Output отправляет напоминания пользователю, реализуется ботом
 type Output interface {
+	ReconcileDailyReminders(ctx context.Context)
 	// DailyReminder - за сегодня в посте нет записей
 	DailyReminder(ctx context.Context, date time.Time) error
 	// WeeklyPreview - превью недели с кнопками отправки
@@ -59,6 +60,7 @@ func (n *Notifier) Run(ctx context.Context) {
 func (n *Notifier) Tick(ctx context.Context, now time.Time) error {
 	now = now.In(n.loc)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, n.loc)
+	n.out.ReconcileDailyReminders(ctx)
 
 	st, err := n.store.Settings(ctx, n.userID)
 	if err != nil {

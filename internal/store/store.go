@@ -66,6 +66,10 @@ func (s *Store) checkMigrated(ctx context.Context) error {
 	if n == 0 {
 		return errors.New("no migrations applied, run `make migrate-up`")
 	}
+	// После загрузки нового образа на сервере могут остаться файлы прежних миграций.
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(message_id) FROM notifications WHERE 0`).Scan(&n); err != nil {
+		return fmt.Errorf("check notifications schema (update checkout and run `make migrate-up`): %w", err)
+	}
 	return nil
 }
 

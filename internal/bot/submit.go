@@ -71,10 +71,6 @@ func (b *Bot) onSubmitButton(ctx context.Context, cq *models.CallbackQuery, mess
 		return
 	}
 	b.answer(ctx, cq, "", false)
-	if messageID != 0 {
-		// Убираем кнопки с превью, чтобы не нажать дважды
-		b.removeKeyboard(ctx, messageID)
-	}
 
 	prompt, err := b.api.SendMessage(ctx, &tgbot.SendMessageParams{
 		ChatID: b.cfg.OwnerID,
@@ -145,13 +141,12 @@ func (b *Bot) refusalLocked() string {
 	return ""
 }
 
-// takePassphrase забирает сообщение как пароль-фразу, если её ждут. Сообщение удаляется сразу,
+// takePassphrase принимает текстовый ответ на текущий запрос. Сообщение удаляется сразу,
 // в логи и базу фраза не попадает
 func (b *Bot) takePassphrase(ctx context.Context, msg *models.Message) bool {
 	b.mu.Lock()
 	p := b.pending
-	// Пока ждём фразу, берём любой текст, кроме /cancel: фраза вполне может начинаться со слэша
-	if p == nil || isCancel(msg.Text) {
+	if p == nil || msg.ReplyToMessage == nil || msg.ReplyToMessage.ID != p.promptID || msg.Text == "" || isCancel(msg.Text) {
 		b.mu.Unlock()
 		return false
 	}
