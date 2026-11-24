@@ -9,6 +9,7 @@ import (
 	"html"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -43,7 +44,8 @@ type Config struct {
 	// Адрес Bot API; пусто - api.telegram.org. Нужен тестам и для своего Bot API сервера
 	ServerURL string
 	// Прокси для запросов к Bot API; пусто - напрямую
-	ProxyURL secret.String
+	ProxyURL   secret.String
+	MiniAppURL *url.URL
 }
 
 const (
@@ -206,7 +208,7 @@ func (b *Bot) today() time.Time {
 
 // send пишет владельцу в личку, HTML-разметка
 func (b *Bot) send(ctx context.Context, text string, markup models.ReplyMarkup) (*models.Message, error) {
-	if rich := weekTableMessage(text); rich != nil {
+	if rich := weekTableMessage(text, b.cfg.MiniAppURL != nil); rich != nil {
 		msg, err := b.api.SendRichMessage(ctx, &tgbot.SendRichMessageParams{
 			ChatID: b.cfg.OwnerID, RichMessage: *rich, ReplyMarkup: markup,
 		})
@@ -252,7 +254,7 @@ func (b *Bot) editMessage(ctx context.Context, messageID int, text string, marku
 		LinkPreviewOptions: &models.LinkPreviewOptions{IsDisabled: tgbot.True()},
 		ReplyMarkup:        markup,
 	}
-	if rich := weekTableMessage(text); rich != nil {
+	if rich := weekTableMessage(text, b.cfg.MiniAppURL != nil); rich != nil {
 		params.Text = ""
 		params.ParseMode = ""
 		params.LinkPreviewOptions = nil

@@ -47,6 +47,9 @@ services:
     cap_add: [NET_ADMIN]
     devices:
       - /dev/net/tun:/dev/net/tun
+    # Mini App бота доступно HTTPS-прокси на хосте через общую сеть контейнеров
+    ports:
+      - "127.0.0.1:18080:18080"
     # Адрес хоста для бота, например для прокси к Telegram (TELEGRAM_PROXY_URL). Бот живёт в сети
     # этого контейнера, поэтому запись задаётся здесь и видна обоим
     extra_hosts:
@@ -76,6 +79,7 @@ services:
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
       CREDS_FILE: /run/secrets/creds
       VPN_RUN_DIR: /run/vpn
+      MINI_APP_LISTEN_ADDR: ":18080"
     secrets:
       - telegram_bot_token
       - creds

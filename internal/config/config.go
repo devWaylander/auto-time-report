@@ -22,7 +22,9 @@ type Config struct {
 	TelegramChannelID int64
 	// Прокси только для Telegram, если Bot API недоступен с сервера напрямую; пусто - напрямую.
 	// secret.String: в адресе бывают логин и пароль прокси
-	TelegramProxyURL secret.String
+	TelegramProxyURL   secret.String
+	TelegramMiniAppURL *url.URL
+	MiniAppListenAddr  string
 
 	DefaultIssue string
 	StartTime    string // ЧЧ:ММ, время начала каждого worklog'а
@@ -80,6 +82,15 @@ func Load() (Config, error) {
 		check("TELEGRAM_PROXY_URL", err)
 		c.TelegramProxyURL = secret.String(v)
 	}
+	if v := opt("TELEGRAM_MINI_APP_URL", ""); v != "" {
+		u, err := url.Parse(v)
+		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			errs = append(errs, errors.New("TELEGRAM_MINI_APP_URL: expected an HTTPS URL without credentials, query or fragment"))
+		} else {
+			c.TelegramMiniAppURL = u
+		}
+	}
+	c.MiniAppListenAddr = opt("MINI_APP_LISTEN_ADDR", "127.0.0.1:18080")
 
 	c.DefaultIssue = opt("JIRA_DEFAULT_ISSUE_KEY", "")
 	if c.DefaultIssue != "" && !issueKeyRe.MatchString(c.DefaultIssue) {

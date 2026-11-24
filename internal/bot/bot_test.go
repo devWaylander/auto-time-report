@@ -63,7 +63,7 @@ func newTestBot(t *testing.T, cal fakeCalendar) (*Bot, *store.Store) {
 }
 
 func TestSubmitDataRoundTrip(t *testing.T) {
-	markup := previewKeyboard(previewKeys{Submit: true, PostID: 17, Hash: hashText("post"), Pending: 2, Filled: true}).(models.InlineKeyboardMarkup)
+	markup := previewKeyboard(previewKeys{Submit: true, PostID: 17, Hash: hashText("post"), Pending: 2, Filled: true})
 	for i, approve := range []bool{false, true} {
 		data := markup.InlineKeyboard[0][i].CallbackData
 		if len(data) > 64 {
@@ -195,7 +195,7 @@ func TestPreviewInputAndRender(t *testing.T) {
 
 func TestWeekTablePreservesUnsupportedArchiveRows(t *testing.T) {
 	const rows = `<tr><td>Пн 19.10</td><td>8ч</td><td>☑️</td></tr><tr><td colspan="3"><b>Примечание</b></td></tr>`
-	rich := weekTableMessage("<b>Неделя 19.10-23.10.2026</b>\n" + weekDaysOpen + rows + weekDaysClose + "\n<b>Итого: 8ч</b>")
+	rich := weekTableMessage("<b>Неделя 19.10-23.10.2026</b>\n"+weekDaysOpen+rows+weekDaysClose+"\n<b>Итого: 8ч</b>", false)
 	want := strings.Replace(rows, "☑️</td>", "☑️&#8288;</td>", 1)
 	if rich == nil || !strings.Contains(rich.HTML, weekDaysOpen+want+weekDaysClose) {
 		t.Fatalf("unsupported archive table was changed: %+v", rich)

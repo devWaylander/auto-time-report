@@ -1,0 +1,25 @@
+<style>
+  .week-card { font-variant-numeric: tabular-nums; }
+  .week-card header, .week-card footer { white-space: pre-line; overflow-wrap: anywhere; }
+  .week-card header { font-size: 1.1em; }
+  .week-card blockquote {
+    display: table;
+    box-sizing: border-box;
+    max-width: 100%;
+    margin: .45em 0 .8em;
+    padding: .35em .65em;
+    border-left: 3px solid var(--tg-theme-accent-text-color, #3e89a3);
+    border-radius: 6px;
+    background: var(--tg-theme-secondary-bg-color, #edf4f7);
+  }
+  .week-card table { border-collapse: collapse; margin: 0; font: inherit; color: inherit; }
+  .week-card td { border: 0; padding: .13em 0; vertical-align: top; }
+  .week-card td:not(:last-child) { padding-right: .6em; white-space: nowrap; }
+  .week-card td:empty { padding-right: 0; }
+  .week-card td:last-child { overflow-wrap: anywhere; }
+</style>
+<section class="week-card">
+  <header>{{.Header}}</header>
+  {{if .Rows}}<blockquote><table><tbody>{{.Rows}}</tbody></table></blockquote>{{end}}
+  {{if .Footer}}<footer>{{.Footer}}</footer>{{end}}
+</section>

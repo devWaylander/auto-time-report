@@ -175,7 +175,12 @@ func (b *Bot) sendWeekArchive(ctx context.Context, msg *models.Message, id strin
 	}
 	row := append(postButton(postURL(b.cfg.ChannelID, archive.ChannelMessageID)),
 		models.InlineKeyboardButton{Text: "✖️ Скрыть", CallbackData: hideData})
-	card, err := b.send(ctx, formatWeekArchive(archive.Text), models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}})
+	text := formatWeekArchive(archive.Text)
+	markup := models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}}
+	if _, _, _, ok := splitWeekTable(text); ok {
+		markup = b.miniAppKeyboard(markup, postID, false, true)
+	}
+	card, err := b.send(ctx, text, markup)
 	if err != nil {
 		slog.Error("send week archive", "error", err)
 		return

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -71,9 +73,30 @@ func run() error {
 		DefaultIssue: cfg.DefaultIssue,
 		Location:     cfg.Timezone,
 		ProxyURL:     cfg.TelegramProxyURL,
+		MiniAppURL:   cfg.TelegramMiniAppURL,
 	}, st, cal, runner, user.ID)
 	if err != nil {
 		return err
+	}
+	if cfg.TelegramMiniAppURL != nil {
+		listener, err := net.Listen("tcp", cfg.MiniAppListenAddr)
+		if err != nil {
+			return fmt.Errorf("listen for mini app: %w", err)
+		}
+		server := &http.Server{
+			Handler: http.HandlerFunc(b.ServeMiniApp), ReadTimeout: 8 * time.Second,
+			WriteTimeout: 20 * time.Second, IdleTimeout: 30 * time.Second,
+		}
+		defer func() {
+			if err := server.Close(); err != nil {
+				slog.Error("close mini app", "error", err)
+			}
+		}()
+		go func() {
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("serve mini app", "error", err)
+			}
+		}()
 	}
 
 	go notify.New(st, cal, b, cfg.Timezone, user.ID, cfg.DefaultIssue).Run(ctx)

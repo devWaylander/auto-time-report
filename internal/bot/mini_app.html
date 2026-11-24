@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Предпросмотр недели</title>
+  <style>
+    body {
+      margin: 0;
+      background: var(--tg-theme-bg-color, #fff);
+      color: var(--tg-theme-text-color, #222);
+      font: 16px/1.45 system-ui, sans-serif;
+    }
+    main { max-width: 36rem; margin: 0 auto; padding: 1rem; }
+  </style>
+  <script src="https://telegram.org/js/telegram-web-app.js?65"></script>
+</head>
+<body>
+  <main aria-live="polite">Загружаю предпросмотр…</main>
+  <script nonce="{{.}}">
+    const app = window.Telegram?.WebApp;
+    const content = document.querySelector('main');
+    async function loadPreview() {
+      app?.ready();
+      if (!app?.initData) {
+        content.textContent = 'Открой превью из чата с ботом';
+        return;
+      }
+      try {
+        const response = await fetch(location.pathname + location.search, {
+          method: 'POST', body: app.initData
+        });
+        const text = await response.text();
+        if (response.ok) {
+          content.innerHTML = text;
+        } else {
+          content.textContent = response.status < 500 ? text : 'Не удалось загрузить предпросмотр';
+        }
+      } catch {
+        content.textContent = 'Не удалось загрузить предпросмотр';
+      }
+    }
+    loadPreview();
+  </script>
+</body>
+</html>

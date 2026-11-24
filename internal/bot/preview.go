@@ -189,7 +189,7 @@ func (b *Bot) viewOf(ctx context.Context, w weekState, err error, submit bool, h
 		text += "\n\n" + problems
 	}
 	view := weekView{
-		text: withHeader(text), markup: previewKeyboard(keys), problems: problems, live: true,
+		text: withHeader(text), markup: b.miniAppKeyboard(previewKeyboard(keys), w.post.ID, submit, false), problems: problems, live: true,
 		archiveKnown: !in.CalendarDown || in.Mismatch || in.Pending > 0,
 	}
 	if in.complete() {
@@ -385,27 +385,38 @@ func alignWeekRows(rows string) string {
 	return aligned.String()
 }
 
-// weekTableMessage переводит заголовок и итоги в абзацы расширенного сообщения
-func weekTableMessage(text string) *models.InputRichMessage {
+func splitWeekTable(text string) (header, rows, footer string, ok bool) {
 	header, rest, ok := strings.Cut(text, weekDaysOpen)
 	if !ok {
-		return nil
+		return "", "", "", false
 	}
-	rows, footer, ok := strings.Cut(rest, weekDaysClose)
+	rows, footer, ok = strings.Cut(rest, weekDaysClose)
+	if !ok {
+		return "", "", "", false
+	}
+	return strings.TrimSpace(header), rows, strings.TrimSpace(footer), true
+}
+
+// weekTableMessage собирает расширенное сообщение из недельной таблицы
+func weekTableMessage(text string, collapsed bool) *models.InputRichMessage {
+	header, rows, footer, ok := splitWeekTable(text)
 	if !ok {
 		return nil
 	}
-	rows = alignWeekRows(rows)
-	if summary := strings.TrimSpace(footer); summary != "" {
-		// Невидимый символ сохраняет одну пустую строку перед итогами
-		footer = wordJoinerHTML + "\n" + summary
-	}
+	table := weekDaysOpen + alignWeekRows(rows) + weekDaysClose
 	paragraphs := func(text string) string {
-		text = strings.ReplaceAll(strings.TrimSpace(text), "\n", "<br>")
+		text = strings.ReplaceAll(text, "\n", "<br>")
 		return "<p>" + strings.ReplaceAll(text, "<br><br>", "</p><p>") + "</p>"
 	}
+	if footer != "" {
+		// Невидимый символ сохраняет одну пустую строку перед итогами
+		footer = wordJoinerHTML + "\n" + footer
+	}
+	if collapsed {
+		table = "<details><summary>Отобразить старый формат</summary>" + table + "</details>"
+	}
 	return &models.InputRichMessage{
-		HTML: paragraphs(header) + weekDaysOpen + rows + weekDaysClose + paragraphs(footer),
+		HTML: paragraphs(header) + table + paragraphs(footer),
 	}
 }
 
@@ -534,7 +545,7 @@ type previewKeys struct {
 // previewKeyboard - кнопки под превью. Сверху действие: в режиме отправки - запись, если есть что
 // записывать, в режиме статуса - переход к отправке. На проверку - только когда заполнены все рабочие дни.
 // Снизу "Обновить" и ссылка на пост или канал
-func previewKeyboard(k previewKeys) models.ReplyMarkup {
+func previewKeyboard(k previewKeys) models.InlineKeyboardMarkup {
 	refresh := models.InlineKeyboardButton{Text: "🔄 Обновить", CallbackData: viewStatus}
 	if k.Submit {
 		refresh.CallbackData = viewSubmit

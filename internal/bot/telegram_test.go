@@ -2,10 +2,13 @@ package bot
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -992,6 +995,91 @@ func TestWidgetProbe(t *testing.T) {
 	if countMethod(calls, "sendWidget") != 1 || !strings.Contains(lastParam(calls, "sendMessage", "text"), "400 Bad Request: INPUT_MEDIA_WIDGET_NOT_ALLOWED") {
 		t.Fatalf("widget error was not reported: %+v", calls)
 	}
+}
+
+func TestMiniAppPreview(t *testing.T) {
+	b, tg, _, st := newTelegramBot(t)
+	b.cfg.MiniAppURL = &url.URL{Scheme: "https", Host: "example.com", Path: "/preview"}
+	ctx := context.Background()
+	week := channelPost("19.10\nРабота - 8ч\n20.10\nРабота - 7ч 30м", day(10, 19))
+	b.onChannelPost(ctx, week, false)
+	tg.take()
+	b.onMessage(ctx, dm("/status"))
+	calls := tg.take()
+	text := lastParam(calls, "sendRichMessage", "text")
+	if !strings.Contains(text, "<details><summary>Отобразить старый формат</summary>"+weekDaysOpen) ||
+		!strings.Contains(text, "</blockquote></details>") || !strings.Contains(text, "Итого: 15ч 30м") {
+		t.Fatalf("collapsed preview = %s", text)
+	}
+	post, err := st.WeekPostByMessage(ctx, week.Chat.ID, int64(week.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := fmt.Sprintf("https://example.com/preview?post=%d", post.ID)
+	markup := lastParam(calls, "sendRichMessage", "reply_markup")
+	if !strings.Contains(markup, `"web_app":{"url":"`+link+`"}`) || !strings.Contains(markup, viewSubmit) || !strings.Contains(markup, viewStatus) {
+		t.Fatalf("preview keyboard = %s", markup)
+	}
+
+	request := func(method, target, data string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		b.ServeMiniApp(response, httptest.NewRequest(method, target, strings.NewReader(data)))
+		return response
+	}
+	page := request(http.MethodGet, link, "")
+	if page.Code != http.StatusOK || strings.Contains(page.Body.String(), "Итого:") || page.Header().Get("Content-Security-Policy") == "" {
+		t.Fatalf("public page response = %d, %s", page.Code, page.Body)
+	}
+	signed := signedMiniAppData(b.cfg.Token.Reveal(), b.cfg.OwnerID, b.now())
+	for _, tt := range []struct {
+		name, link, data string
+		code             int
+	}{
+		{"missing signature", link, "", http.StatusUnauthorized},
+		{"changed signature", link, signed + "x", http.StatusUnauthorized},
+		{"different user", link, signedMiniAppData(b.cfg.Token.Reveal(), 7, b.now()), http.StatusUnauthorized},
+		{"expired", link, signedMiniAppData(b.cfg.Token.Reveal(), b.cfg.OwnerID, b.now().Add(-16*time.Minute)), http.StatusUnauthorized},
+		{"stale post", "https://example.com/preview?post=999999", signed, http.StatusNotFound},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := request(http.MethodPost, tt.link, tt.data)
+			if got.Code != tt.code || strings.Contains(got.Body.String(), "Итого:") {
+				t.Fatalf("response = %d, %s", got.Code, got.Body)
+			}
+		})
+	}
+	card := request(http.MethodPost, link, signed)
+	if card.Code != http.StatusOK || !strings.Contains(card.Body.String(), "<td>8ч</td>") ||
+		!strings.Contains(card.Body.String(), "<td>7ч 30м</td>") || !strings.Contains(card.Body.String(), "Итого: 15ч 30м") {
+		t.Fatalf("preview response = %d, %s", card.Code, card.Body)
+	}
+	archived := "<b>Сохранённый итог</b>\n<pre>Пн 19.10  8ч  ☑️</pre>\n<b>Итого: 8ч</b>"
+	if err := st.SaveWeekArchive(ctx, post.ID, archived); err != nil {
+		t.Fatal(err)
+	}
+	b.onMessage(ctx, dm(fmt.Sprintf("/start week_%d", post.ID)))
+	calls = tg.take()
+	if got := lastParam(calls, "sendRichMessage", "reply_markup"); !strings.Contains(got, fmt.Sprintf("archive=1\\u0026post=%d", post.ID)) {
+		t.Fatalf("archive keyboard = %s", got)
+	}
+	card = request(http.MethodPost, link+"&archive=1", signed)
+	if card.Code != http.StatusOK || !strings.Contains(card.Body.String(), "Сохранённый итог") || !strings.Contains(card.Body.String(), "<td>8ч</td>") {
+		t.Fatalf("archive response = %d, %s", card.Code, card.Body)
+	}
+}
+
+func signedMiniAppData(token string, id int64, at time.Time) string {
+	user := fmt.Sprintf(`{"id":%d,"first_name":"Mini App"}`, id)
+	authDate := strconv.FormatInt(at.Unix(), 10)
+	check := "auth_date=" + authDate + "\nquery_id=query\nsignature=signature\nuser=" + user
+	secret := hmac.New(sha256.New, []byte("WebAppData"))
+	_, _ = secret.Write([]byte(token))
+	mac := hmac.New(sha256.New, secret.Sum(nil))
+	_, _ = mac.Write([]byte(check))
+	return url.Values{
+		"auth_date": {authDate}, "query_id": {"query"}, "signature": {"signature"}, "user": {user},
+		"hash": {fmt.Sprintf("%x", mac.Sum(nil))},
+	}.Encode()
 }
 
 func TestLivePreviewAdaptsToLongestDuration(t *testing.T) {
