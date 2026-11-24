@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -144,24 +145,24 @@ func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.Rep
 	return v.text, v.markup
 }
 
-// sendTableSample показывает текущую неделю без цитаты отдельным сообщением
+// sendTableSample показывает текущую неделю с компактными строками отдельным сообщением
 func (b *Bot) sendTableSample(ctx context.Context, msg *models.Message) {
-	text, _ := b.buildPreview(ctx, false)
-	rich := weekTableMessage(text)
-	if rich == nil {
-		b.notify(ctx, text)
+	w, err := b.loadWeek(ctx)
+	if err != nil {
+		b.notify(ctx, b.viewOf(ctx, w, err, false, "").text)
 		return
 	}
-	rich.HTML = strings.Replace(rich.HTML, weekDaysOpen, "<table compact>", 1)
-	rich.HTML = strings.Replace(rich.HTML, weekDaysClose, "</table>", 1)
-	_, err := b.api.SendRichMessage(ctx, &tgbot.SendRichMessageParams{
-		ChatID: b.cfg.OwnerID, RichMessage: *rich,
-		ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-			{{Text: "✖️ Скрыть", CallbackData: hideData}},
-		}},
-	})
+	in := b.previewInput(ctx, w)
+	in.AlignStatuses = true
+	text := renderPreview(in)
+	if problems := b.warnings(ctx, w.report); problems != "" {
+		text += "\n\n" + problems
+	}
+	_, err = b.send(ctx, text, models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+		{{Text: "✖️ Скрыть", CallbackData: hideData}},
+	}})
 	if err != nil {
-		slog.Error("send table sample", "error", b.redact(err.Error()))
+		slog.Error("send table sample", "error", err)
 		b.notify(ctx, "⚠️ Ошибка отправки тестовой таблицы")
 		return
 	}
@@ -260,19 +261,27 @@ func (d dayLine) shortfall() time.Duration {
 	return d.Kind.Norm() - d.Total
 }
 
+func (d dayLine) durationText() string {
+	if d.Total <= 0 {
+		return ""
+	}
+	return parser.FormatDuration(d.Total)
+}
+
 type previewInput struct {
-	Days         []dayLine
-	Total        time.Duration
-	Norm         time.Duration
-	Missing      []time.Time
-	Unfilled     bool // есть рабочие дни без записей, в том числе будущие: на проверку рано
-	Pending      int
-	Unapproved   int
-	Requested    bool // есть подтверждение отправки для каждой недели в посте
-	Mismatch     bool
-	CalendarDown bool
-	Today        time.Time
-	Submit       bool // превью с кнопками отправки
+	Days          []dayLine
+	Total         time.Duration
+	Norm          time.Duration
+	Missing       []time.Time
+	Unfilled      bool // есть рабочие дни без записей, в том числе будущие: на проверку рано
+	Pending       int
+	Unapproved    int
+	Requested     bool // есть подтверждение отправки для каждой недели в посте
+	Mismatch      bool
+	CalendarDown  bool
+	Today         time.Time
+	Submit        bool // превью с кнопками отправки
+	AlignStatuses bool // адаптивное выравнивание в /tabletest
 }
 
 func (in previewInput) complete() bool {
@@ -368,6 +377,19 @@ func renderDayRow(date, total, status string) string {
 	return "<tr><td>" + date + "</td><td>" + total + "</td><td>" + status + "</td></tr>"
 }
 
+func renderAlignedDayRow(date, total, status string, durationWidth int) string {
+	const nbsp = "&#160;"
+	prefix := strings.ReplaceAll(date, " ", nbsp)
+	if total != "" {
+		prefix += nbsp + "· " + strings.ReplaceAll(total, " ", nbsp)
+	} else if durationWidth > 0 {
+		prefix += nbsp + nbsp + " "
+	}
+	// Обычный пробел перед временем позволяет перенести его на узком экране
+	prefix += strings.Repeat(nbsp, durationWidth-utf8.RuneCountInString(total)+2)
+	return "<tr><td><code>" + prefix + "</code>" + status + "</td></tr>"
+}
+
 func renderDayIssues(issues string) string {
 	return `<tr><td colspan="3">↳ ` + issues + "</td></tr>"
 }
@@ -402,6 +424,12 @@ func renderPreview(in previewInput) string {
 	first, last := in.Days[0].Date, in.Days[len(in.Days)-1].Date
 	fmt.Fprintf(&b, "<b>Неделя %s-%s</b>\n", first.Format("02.01"), last.Format("02.01.2006"))
 
+	var durationWidth int
+	if in.AlignStatuses {
+		for _, d := range in.Days {
+			durationWidth = max(durationWidth, utf8.RuneCountInString(d.durationText()))
+		}
+	}
 	b.WriteString(weekDaysOpen)
 	for _, d := range in.Days {
 		mark := "▫️"
@@ -438,16 +466,22 @@ func renderPreview(in previewInput) string {
 			notes = append(notes, "сегодня")
 		}
 		date := weekdays[d.Date.Weekday()] + " " + d.Date.Format("02.01")
-		var total string
-		if d.Total > 0 {
-			total = parser.FormatDuration(d.Total)
-		}
+		total := d.durationText()
 		if len(notes) > 0 {
 			mark += " " + strings.Join(notes, " · ")
 		}
-		b.WriteString(renderDayRow(date, total, mark))
+		if in.AlignStatuses {
+			b.WriteString(renderAlignedDayRow(date, total, mark, durationWidth))
+		} else {
+			b.WriteString(renderDayRow(date, total, mark))
+		}
 		if len(d.Issues) > 0 {
-			b.WriteString(renderDayIssues(html.EscapeString(strings.Join(d.Issues, ", "))))
+			issues := html.EscapeString(strings.Join(d.Issues, ", "))
+			if in.AlignStatuses {
+				b.WriteString("<tr><td>↳ " + issues + "</td></tr>")
+			} else {
+				b.WriteString(renderDayIssues(issues))
+			}
 		}
 	}
 	b.WriteString(weekDaysClose + "\n")

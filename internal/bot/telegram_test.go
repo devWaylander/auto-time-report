@@ -997,27 +997,55 @@ func TestWidgetProbe(t *testing.T) {
 func TestTableSampleKeepsLivePreview(t *testing.T) {
 	b, tg, _, _ := newTelegramBot(t)
 	ctx := context.Background()
-	b.onChannelPost(ctx, channelPost("19.10\nРабота - 8ч", day(10, 19)), false)
+	week := channelPost("19.10\nРабота - 8ч\n20.10\nРабота - 7ч", day(10, 19))
+	b.onChannelPost(ctx, week, false)
 	tg.take()
 	b.onMessage(ctx, dm("/status"))
 	quoted := lastParam(tg.take(), "sendRichMessage", "text")
-	if !strings.Contains(quoted, "<blockquote><table compact>") {
-		t.Fatalf("status is missing its quote: %s", quoted)
+	if !strings.Contains(quoted, "<blockquote><table compact><tr><td>Пн 19.10</td><td>8ч</td>") {
+		t.Fatalf("status lost its regular table: %s", quoted)
 	}
 	active := liveID(b)
 	pending := &pendingSubmit{promptID: 7, expires: fixedClock().Add(-time.Minute)}
 	b.pending = pending
-	command := dm("/tabletest")
-	b.onMessage(ctx, command)
-	calls := tg.take()
-	want := strings.NewReplacer("<blockquote>", "", "</blockquote>", "").Replace(quoted)
-	if got := lastParam(calls, "sendRichMessage", "text"); got != want {
-		t.Fatalf("table sample = %s, want %s", got, want)
+	sample := func() string {
+		t.Helper()
+		command := dm("/tabletest")
+		b.onMessage(ctx, command)
+		calls := tg.take()
+		if len(calls) != 2 || calls[0].method != "sendRichMessage" ||
+			lastParam(calls, "deleteMessage", "message_id") != strconv.Itoa(command.ID) ||
+			liveID(b) != active || b.pending != pending {
+			t.Fatalf("table sample changed the active preview or pending request: %+v", calls)
+		}
+		return lastParam(calls, "sendRichMessage", "text")
 	}
-	if len(calls) != 2 || calls[0].method != "sendRichMessage" ||
-		lastParam(calls, "deleteMessage", "message_id") != strconv.Itoa(command.ID) ||
-		liveID(b) != active || b.pending != pending {
-		t.Fatalf("table sample changed the active preview or pending request: %+v", calls)
+	checkRows := func(got string, want ...string) {
+		t.Helper()
+		for _, row := range want {
+			if !strings.Contains(got, row) {
+				t.Errorf("table sample has no %q: %s", row, got)
+			}
+		}
+	}
+	shortMonday := "<tr><td><code>Пн&#160;19.10&#160;· 8ч&#160;&#160;</code>🔹</td></tr>"
+	short := sample()
+	checkRows(short, "<blockquote><table compact>"+shortMonday,
+		"<tr><td><code>Ср&#160;21.10&#160;&#160; "+strings.Repeat("&#160;", 4)+"</code>▫️</td></tr>",
+		"</blockquote><p>&#8288;<br><b>Итого: 15ч</b>")
+
+	b.onChannelPost(ctx, edit(week, week.Text+"\nABC-2\n20.10\nСозвон - 30м", day(10, 23)), true)
+	tg.take()
+	checkRows(sample(),
+		"<tr><td><code>Пн&#160;19.10&#160;· 8ч"+strings.Repeat("&#160;", 6)+"</code>🔹</td></tr>",
+		"<tr><td><code>Вт&#160;20.10&#160;· 7ч&#160;30м&#160;&#160;</code>🔹 норма 8ч</td></tr>",
+		"<tr><td><code>Ср&#160;21.10&#160;&#160; "+strings.Repeat("&#160;", 8)+"</code>▫️</td></tr>",
+		"<tr><td>↳ ABC-1 7ч, ABC-2 30м</td></tr>")
+
+	b.onChannelPost(ctx, edit(week, week.Text, day(10, 23).Add(time.Minute)), true)
+	tg.take()
+	if got := sample(); got != short {
+		t.Fatalf("sample did not shrink once the longer value was removed: %s", got)
 	}
 }
 
