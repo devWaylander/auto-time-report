@@ -994,58 +994,43 @@ func TestWidgetProbe(t *testing.T) {
 	}
 }
 
-func TestTableSampleKeepsLivePreview(t *testing.T) {
+func TestLivePreviewAdaptsToLongestDuration(t *testing.T) {
 	b, tg, _, _ := newTelegramBot(t)
 	ctx := context.Background()
 	week := channelPost("19.10\nРабота - 8ч\n20.10\nРабота - 7ч", day(10, 19))
 	b.onChannelPost(ctx, week, false)
 	tg.take()
 	b.onMessage(ctx, dm("/status"))
-	quoted := lastParam(tg.take(), "sendRichMessage", "text")
-	if !strings.Contains(quoted, "<blockquote><table compact><tr><td>Пн 19.10</td><td>8ч</td>") {
-		t.Fatalf("status lost its regular table: %s", quoted)
-	}
+	short := lastParam(tg.take(), "sendRichMessage", "text")
 	active := liveID(b)
-	pending := &pendingSubmit{promptID: 7, expires: fixedClock().Add(-time.Minute)}
-	b.pending = pending
-	sample := func() string {
-		t.Helper()
-		command := dm("/tabletest")
-		b.onMessage(ctx, command)
-		calls := tg.take()
-		if len(calls) != 2 || calls[0].method != "sendRichMessage" ||
-			lastParam(calls, "deleteMessage", "message_id") != strconv.Itoa(command.ID) ||
-			liveID(b) != active || b.pending != pending {
-			t.Fatalf("table sample changed the active preview or pending request: %+v", calls)
-		}
-		return lastParam(calls, "sendRichMessage", "text")
-	}
 	checkRows := func(got string, want ...string) {
 		t.Helper()
 		for _, row := range want {
 			if !strings.Contains(got, row) {
-				t.Errorf("table sample has no %q: %s", row, got)
+				t.Errorf("preview has no %q: %s", row, got)
 			}
 		}
 	}
 	shortMonday := "<tr><td><code>Пн&#160;19.10&#160;· 8ч&#160;&#160;</code>🔹</td></tr>"
-	short := sample()
 	checkRows(short, "<blockquote><table compact>"+shortMonday,
 		"<tr><td><code>Ср&#160;21.10&#160;&#160; "+strings.Repeat("&#160;", 4)+"</code>▫️</td></tr>",
 		"</blockquote><p>&#8288;<br><b>Итого: 15ч</b>")
 
 	b.onChannelPost(ctx, edit(week, week.Text+"\nABC-2\n20.10\nСозвон - 30м", day(10, 23)), true)
-	tg.take()
-	checkRows(sample(),
+	calls := tg.take()
+	if !inPlace(calls, active, "Итого: 15ч 30м") || liveID(b) != active {
+		t.Fatalf("longer duration did not update the active preview: %+v", calls)
+	}
+	checkRows(lastParam(calls, "editMessageText", "text"),
 		"<tr><td><code>Пн&#160;19.10&#160;· 8ч"+strings.Repeat("&#160;", 6)+"</code>🔹</td></tr>",
 		"<tr><td><code>Вт&#160;20.10&#160;· 7ч&#160;30м&#160;&#160;</code>🔹 норма 8ч</td></tr>",
 		"<tr><td><code>Ср&#160;21.10&#160;&#160; "+strings.Repeat("&#160;", 8)+"</code>▫️</td></tr>",
 		"<tr><td>↳ ABC-1 7ч, ABC-2 30м</td></tr>")
 
 	b.onChannelPost(ctx, edit(week, week.Text, day(10, 23).Add(time.Minute)), true)
-	tg.take()
-	if got := sample(); got != short {
-		t.Fatalf("sample did not shrink once the longer value was removed: %s", got)
+	calls = tg.take()
+	if !inPlace(calls, active, "Итого: 15ч") || liveID(b) != active || lastParam(calls, "editMessageText", "text") != short {
+		t.Fatalf("preview did not shrink once the longer value was removed: %+v", calls)
 	}
 }
 
@@ -1175,9 +1160,10 @@ func TestPreviewButtons(t *testing.T) {
 	if countMethod(calls, "sendRichMessage") != 1 || !strings.Contains(lastParam(calls, "sendRichMessage", "reply_markup"), viewSubmit) {
 		t.Fatalf("/status has no way to submit: %+v", calls)
 	}
-	if got := lastParam(calls, "sendRichMessage", "text"); !strings.Contains(got, "<td>🔹&#8288;</td>") ||
-		!strings.Contains(got, "<td>▫️&#8288;</td>") || !strings.Contains(got, "<td>▫️ сегодня</td>") {
-		t.Fatalf("preview did not handle standalone emoji in its table:\n%s", got)
+	if got := lastParam(calls, "sendRichMessage", "text"); !strings.Contains(got, "</code>🔹</td>") ||
+		!strings.Contains(got, "</code>▫️</td>") || !strings.Contains(got, "</code>▫️ сегодня</td>") ||
+		strings.Count(got, "&#8288;") != 1 || !strings.Contains(got, "</table></blockquote><p>&#8288;<br>") {
+		t.Fatalf("preview did not place statuses after the prefix and keep the footer spacer:\n%s", got)
 	}
 	if calls[0].method != "sendRichMessage" || lastParam(calls, "deleteMessage", "message_id") != fmt.Sprint(status.ID) {
 		t.Fatalf("/status was not deleted after the preview was sent: %+v", calls)
@@ -1271,7 +1257,7 @@ func TestWorklogFoundInJiraIsRemembered(t *testing.T) {
 
 	b.onMessage(ctx, dm("/status"))
 	preview := strings.Join(tg.sent(tg.take()), "\n")
-	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "<tr><td>Пн 19.10</td><td>8ч</td><td>⚠️ вручную · в Jira 6ч</td></tr>") {
+	if strings.Contains(preview, "К записи в Jira") || !strings.Contains(preview, "<tr><td><code>Пн&#160;19.10&#160;· 8ч&#160;&#160;</code>⚠️ вручную · в Jira 6ч</td></tr>") {
 		t.Fatalf("manual day is not counted as written or its mismatch is hidden:\n%s", preview)
 	}
 
@@ -1306,7 +1292,8 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	b.onMessage(ctx, replyDM("Str0ng-Passphrase-XYZ", 7))
 	calls := tg.take()
 	// После отправки живой предпросмотр показывает свежее состояние на месте
-	if lastParam(calls, "editMessageText", "message_id") != live || !strings.Contains(lastParam(calls, "editMessageText", "text"), "<tr><td>Вт 20.10</td><td>8ч</td><td>☑️&#8288;</td></tr>") {
+	const writtenTuesday = "<tr><td><code>Вт&#160;20.10&#160;· 8ч&#160;&#160;</code>☑️</td></tr>"
+	if lastParam(calls, "editMessageText", "message_id") != live || !strings.Contains(lastParam(calls, "editMessageText", "text"), writtenTuesday) {
 		t.Fatalf("live preview not refreshed after submit: %+v", calls)
 	}
 	if len(runner.jobs) != 1 {
@@ -1318,7 +1305,7 @@ func TestSubmitOnlyMissingWorklogOfPartialDay(t *testing.T) {
 	}
 
 	b.onMessage(ctx, dm("/status"))
-	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, "<tr><td>Вт 20.10</td><td>8ч</td><td>☑️&#8288;</td></tr>") || strings.Contains(preview, "К записи") {
+	if preview := strings.Join(tg.sent(tg.take()), "\n"); !strings.Contains(preview, writtenTuesday) || strings.Contains(preview, "К записи") {
 		t.Fatalf("day is not fully written after submit:\n%s", preview)
 	}
 }
@@ -1447,7 +1434,7 @@ func TestWeekArchiveButtonLifecycle(t *testing.T) {
 	b.pending = pending
 	b.onMessage(ctx, dm("/start "+payload))
 	calls = tg.take()
-	if result := lastParam(calls, "sendRichMessage", "text"); !strings.Contains(result, "<blockquote><table compact><tr><td>Пн 19.10</td><td>8ч</td><td>☑️ вручную</td></tr>") ||
+	if result := lastParam(calls, "sendRichMessage", "text"); !strings.Contains(result, "<blockquote><table compact><tr><td><code>Пн&#160;19.10&#160;· 8ч&#160;&#160;</code>☑️ вручную</td></tr>") ||
 		!strings.Contains(result, "Всё записано и отправлено на проверку") || !strings.Contains(result, "вручную") ||
 		strings.Contains(result, "сегодня") || b.pending != pending || liveID(b) != active {
 		t.Fatalf("incorrect archived result or changed bot state: %+v", calls)
@@ -1523,8 +1510,9 @@ func TestWeekArchiveReplacesPreviousCard(t *testing.T) {
 	const savedText = header + "<pre>Пн 12.10  8ч        ☑️ вручную\nВт 13.10  6ч из 8ч  ☑️\n    ABC-1 4ч, ABC-2 2ч\n</pre>" + summary
 	const savedQuote = header + "<blockquote><code>Пн 12.10 8ч ☑️ вручную\nВт 13.10 6ч ☑️ норма 8ч\n    ABC-1 4ч, ABC-2 2ч</code></blockquote>" + summary
 	const displayedText = `<p><b>Неделя 12.10-16.10.2026</b></p><blockquote><table compact>` +
-		`<tr><td>Пн 12.10</td><td>8ч</td><td>☑️ вручную</td></tr><tr><td>Вт 13.10</td><td>6ч</td><td>☑️ норма 8ч</td></tr>` +
-		`<tr><td colspan="3">↳ ABC-1 4ч, ABC-2 2ч</td></tr></table></blockquote><p>&#8288;<br><b>Итого: 14ч</b></p>`
+		`<tr><td><code>Пн&#160;12.10&#160;· 8ч&#160;&#160;</code>☑️ вручную</td></tr>` +
+		`<tr><td><code>Вт&#160;13.10&#160;· 6ч&#160;&#160;</code>☑️ норма 8ч</td></tr>` +
+		`<tr><td>↳ ABC-1 4ч, ABC-2 2ч</td></tr></table></blockquote><p>&#8288;<br><b>Итого: 14ч</b></p>`
 	first, other := saveArchive(42, savedText), saveArchive(43, savedQuote)
 	b.onMessage(ctx, dm("/status"))
 	active := liveID(b)
@@ -1546,10 +1534,16 @@ func TestWeekArchiveReplacesPreviousCard(t *testing.T) {
 	if calls := tg.take(); countMethod(calls, "deleteMessage") != 1 || lastParam(calls, "sendRichMessage", "text") != displayedText {
 		t.Fatalf("opening another archive changed the formatting or touched the previous card: %+v", calls)
 	}
-	const savedTable = header + `<blockquote><table compact><tr><td>Пн 12.10</td><td>8ч</td><td>☑️</td></tr></table></blockquote>` + summary
+	const savedTable = header + `<blockquote><table compact><tr><td>Пн 12.10</td><td>8ч</td><td>☑️</td></tr>` +
+		`<tr><td>Вт 13.10</td><td>7ч 30м</td><td>☑️ норма 8ч</td></tr><tr><td colspan="3">↳ ABC-1 7ч, ABC-2 30м</td></tr>` +
+		"</table></blockquote>\n<b>Итого: 15ч 30м</b>"
 	b.onMessage(ctx, dm("/start "+saveArchive(44, savedTable)))
-	if got := lastParam(tg.take(), "sendRichMessage", "text"); !strings.Contains(got, "<td>☑️&#8288;</td>") {
-		t.Fatalf("emoji in the saved table was not made compact:\n%s", got)
+	wantTable := `<p><b>Неделя 12.10-16.10.2026</b></p><blockquote><table compact>` +
+		`<tr><td><code>Пн&#160;12.10&#160;· 8ч` + strings.Repeat("&#160;", 6) + `</code>☑️</td></tr>` +
+		`<tr><td><code>Вт&#160;13.10&#160;· 7ч&#160;30м&#160;&#160;</code>☑️ норма 8ч</td></tr>` +
+		`<tr><td>↳ ABC-1 7ч, ABC-2 30м</td></tr></table></blockquote><p>&#8288;<br><b>Итого: 15ч 30м</b></p>`
+	if got := lastParam(tg.take(), "sendRichMessage", "text"); got != wantTable {
+		t.Fatalf("saved table was not converted to adaptive layout:\n%s", got)
 	}
 
 	restarted, err := New(b.cfg, st, b.cal, runner, b.userID)

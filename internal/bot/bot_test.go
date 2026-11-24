@@ -193,6 +193,15 @@ func TestPreviewInputAndRender(t *testing.T) {
 	}
 }
 
+func TestWeekTablePreservesUnsupportedArchiveRows(t *testing.T) {
+	const rows = `<tr><td>Пн 19.10</td><td>8ч</td><td>☑️</td></tr><tr><td colspan="3"><b>Примечание</b></td></tr>`
+	rich := weekTableMessage("<b>Неделя 19.10-23.10.2026</b>\n" + weekDaysOpen + rows + weekDaysClose + "\n<b>Итого: 8ч</b>")
+	want := strings.Replace(rows, "☑️</td>", "☑️&#8288;</td>", 1)
+	if rich == nil || !strings.Contains(rich.HTML, weekDaysOpen+want+weekDaysClose) {
+		t.Fatalf("unsupported archive table was changed: %+v", rich)
+	}
+}
+
 func TestPreviewApprovalWaitsForFilledWeek(t *testing.T) {
 	b, st := newTestBot(t, nil)
 	ctx := context.Background()

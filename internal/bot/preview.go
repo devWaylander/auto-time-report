@@ -145,32 +145,6 @@ func (b *Bot) buildPreview(ctx context.Context, submit bool) (string, models.Rep
 	return v.text, v.markup
 }
 
-// sendTableSample показывает текущую неделю с компактными строками отдельным сообщением
-func (b *Bot) sendTableSample(ctx context.Context, msg *models.Message) {
-	w, err := b.loadWeek(ctx)
-	if err != nil {
-		b.notify(ctx, b.viewOf(ctx, w, err, false, "").text)
-		return
-	}
-	in := b.previewInput(ctx, w)
-	in.AlignStatuses = true
-	text := renderPreview(in)
-	if problems := b.warnings(ctx, w.report); problems != "" {
-		text += "\n\n" + problems
-	}
-	_, err = b.send(ctx, text, models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-		{{Text: "✖️ Скрыть", CallbackData: hideData}},
-	}})
-	if err != nil {
-		slog.Error("send table sample", "error", err)
-		b.notify(ctx, "⚠️ Ошибка отправки тестовой таблицы")
-		return
-	}
-	if err := b.deleteMessage(ctx, msg.Chat.ID, msg.ID); err != nil {
-		slog.Warn("delete table test command", "error", err)
-	}
-}
-
 // weekView - сообщение о посте: превью с предупреждениями под ним или ошибки разбора
 type weekView struct {
 	text         string
@@ -261,27 +235,19 @@ func (d dayLine) shortfall() time.Duration {
 	return d.Kind.Norm() - d.Total
 }
 
-func (d dayLine) durationText() string {
-	if d.Total <= 0 {
-		return ""
-	}
-	return parser.FormatDuration(d.Total)
-}
-
 type previewInput struct {
-	Days          []dayLine
-	Total         time.Duration
-	Norm          time.Duration
-	Missing       []time.Time
-	Unfilled      bool // есть рабочие дни без записей, в том числе будущие: на проверку рано
-	Pending       int
-	Unapproved    int
-	Requested     bool // есть подтверждение отправки для каждой недели в посте
-	Mismatch      bool
-	CalendarDown  bool
-	Today         time.Time
-	Submit        bool // превью с кнопками отправки
-	AlignStatuses bool // адаптивное выравнивание в /tabletest
+	Days         []dayLine
+	Total        time.Duration
+	Norm         time.Duration
+	Missing      []time.Time
+	Unfilled     bool // есть рабочие дни без записей, в том числе будущие: на проверку рано
+	Pending      int
+	Unapproved   int
+	Requested    bool // есть подтверждение отправки для каждой недели в посте
+	Mismatch     bool
+	CalendarDown bool
+	Today        time.Time
+	Submit       bool // превью с кнопками отправки
 }
 
 func (in previewInput) complete() bool {
@@ -372,6 +338,7 @@ const (
 )
 
 var emojiOnlyWeekCell = regexp.MustCompile(`<td>(` + weekStatusEmoji + `)</td>`)
+var savedWeekRow = regexp.MustCompile(`<tr><td>([^<&]+)</td><td>([^<&]*)</td><td>([^<]+)</td></tr>|<tr><td colspan="3">(↳ [^<]*)</td></tr>`)
 
 func renderDayRow(date, total, status string) string {
 	return "<tr><td>" + date + "</td><td>" + total + "</td><td>" + status + "</td></tr>"
@@ -394,6 +361,30 @@ func renderDayIssues(issues string) string {
 	return `<tr><td colspan="3">↳ ` + issues + "</td></tr>"
 }
 
+// alignWeekRows выравнивает значки по самой длинной длительности, в том числе в сохранённых итогах
+func alignWeekRows(rows string) string {
+	matched := savedWeekRow.FindAllStringSubmatch(rows, -1)
+	var durationWidth, matchedBytes int
+	for _, row := range matched {
+		matchedBytes += len(row[0])
+		durationWidth = max(durationWidth, utf8.RuneCountInString(row[2]))
+	}
+	if matchedBytes != len(rows) {
+		// Не перестраиваем таблицу частично, если архив содержит другую разметку
+		// U+2060 удерживает обычную высоту старых ячеек со значком на Android
+		return emojiOnlyWeekCell.ReplaceAllString(rows, `<td>${1}`+wordJoinerHTML+`</td>`)
+	}
+	var aligned strings.Builder
+	for _, row := range matched {
+		if row[4] != "" {
+			aligned.WriteString("<tr><td>" + row[4] + "</td></tr>")
+		} else {
+			aligned.WriteString(renderAlignedDayRow(row[1], row[2], row[3], durationWidth))
+		}
+	}
+	return aligned.String()
+}
+
 // weekTableMessage переводит заголовок и итоги в абзацы расширенного сообщения
 func weekTableMessage(text string) *models.InputRichMessage {
 	header, rest, ok := strings.Cut(text, weekDaysOpen)
@@ -404,8 +395,7 @@ func weekTableMessage(text string) *models.InputRichMessage {
 	if !ok {
 		return nil
 	}
-	// Android растягивает ячейки с одним эмодзи до квадрата, U+2060 оставляет обычную высоту строки
-	rows = emojiOnlyWeekCell.ReplaceAllString(rows, `<td>${1}`+wordJoinerHTML+`</td>`)
+	rows = alignWeekRows(rows)
 	if summary := strings.TrimSpace(footer); summary != "" {
 		// Невидимый символ сохраняет одну пустую строку перед итогами
 		footer = wordJoinerHTML + "\n" + summary
@@ -424,12 +414,6 @@ func renderPreview(in previewInput) string {
 	first, last := in.Days[0].Date, in.Days[len(in.Days)-1].Date
 	fmt.Fprintf(&b, "<b>Неделя %s-%s</b>\n", first.Format("02.01"), last.Format("02.01.2006"))
 
-	var durationWidth int
-	if in.AlignStatuses {
-		for _, d := range in.Days {
-			durationWidth = max(durationWidth, utf8.RuneCountInString(d.durationText()))
-		}
-	}
 	b.WriteString(weekDaysOpen)
 	for _, d := range in.Days {
 		mark := "▫️"
@@ -466,22 +450,16 @@ func renderPreview(in previewInput) string {
 			notes = append(notes, "сегодня")
 		}
 		date := weekdays[d.Date.Weekday()] + " " + d.Date.Format("02.01")
-		total := d.durationText()
+		var total string
+		if d.Total > 0 {
+			total = parser.FormatDuration(d.Total)
+		}
 		if len(notes) > 0 {
 			mark += " " + strings.Join(notes, " · ")
 		}
-		if in.AlignStatuses {
-			b.WriteString(renderAlignedDayRow(date, total, mark, durationWidth))
-		} else {
-			b.WriteString(renderDayRow(date, total, mark))
-		}
+		b.WriteString(renderDayRow(date, total, mark))
 		if len(d.Issues) > 0 {
-			issues := html.EscapeString(strings.Join(d.Issues, ", "))
-			if in.AlignStatuses {
-				b.WriteString("<tr><td>↳ " + issues + "</td></tr>")
-			} else {
-				b.WriteString(renderDayIssues(issues))
-			}
+			b.WriteString(renderDayIssues(html.EscapeString(strings.Join(d.Issues, ", "))))
 		}
 	}
 	b.WriteString(weekDaysClose + "\n")
