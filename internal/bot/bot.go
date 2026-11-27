@@ -597,7 +597,7 @@ func (b *Bot) changedSubmitted(ctx context.Context, report parser.Report) (strin
 }
 
 func (b *Bot) onMessage(ctx context.Context, msg *models.Message) {
-	if !b.fromOwner(msg) {
+	if !b.fromOwner(msg) || msg.MessageAutoDeleteTimerChanged != nil {
 		return
 	}
 	text := strings.TrimSpace(msg.Text)

@@ -959,6 +959,18 @@ func TestSubmitPromptKeepsPreviewKeyboard(t *testing.T) {
 	b.pending = nil
 }
 
+func TestAutoDeleteTimerChangesAreSilent(t *testing.T) {
+	b, tg, _, _ := newTelegramBot(t)
+	for _, seconds := range []int{604800, 86400, 0} {
+		msg := dm("")
+		msg.MessageAutoDeleteTimerChanged = &models.MessageAutoDeleteTimerChanged{MessageAutoDeleteTime: seconds}
+		b.handle(context.Background(), nil, &models.Update{Message: msg})
+		if calls := tg.take(); len(calls) != 0 {
+			t.Fatalf("timer change to %d seconds triggered Telegram calls: %+v", seconds, calls)
+		}
+	}
+}
+
 func TestStrayTextAndUnknownCommandsAreDeleted(t *testing.T) {
 	b, tg, _, _ := newTelegramBot(t)
 	for _, text := range []string{"просто текст", "/whatever"} {
